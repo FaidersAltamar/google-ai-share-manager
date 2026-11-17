@@ -3,3 +3,4 @@ cookies.txt
 __pycache__/
 *.pyc
 .env
+.geny_token

@@ -1,14 +1,27 @@
 """API REST para generar enlaces de compartir de Google AI Mode.
 
+Proveedores 100% propios (sin servicios de terceros):
+- aimode: conversación AI Mode compartida (funciona hoy, gratis)
+- linkcard: app Google en Android del VPS (requiere Android vivo; módulo linkcard_adb)
+- registro manual de tokens acuñados desde el iPhone del operador (/links/bare)
+
 Gestión de sesiones:
 - POST /session/cookies         → pega cookies en formato flexible (array JSON o header string)
 - POST /session/storage-state   → sube el storage_state completo de Playwright
 - GET  /session/list            → sesiones activas + estado keep-alive
 - DELETE /session/{account}     → elimina una sesión
+
+Enlaces bare (token acuñado manualmente o por worker):
+- POST /links/bare   → registra un código share.google, valida cadena, cataloga y devuelve link final
+- GET  /links/list   → catálogo con estado de verificación
+- POST /links/queue  → encola URL para el worker ADB
+- GET  /links/queue  → el worker toma el siguiente trabajo
 """
 import json
 import os
 import re
+import time
+import urllib.request
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -17,28 +30,28 @@ from pydantic import BaseModel
 from generate_share_link import generate_ai_share_link
 from keepalive import SESSIONS_DIR, STATE_FILE, start_keepalive_thread
 from linkcard_adb import diagnostico as android_diagnostico, generar_linkcard
-from provider_akr import crear_bare_link
 from session_utils import build_storage_state, parse_cookies
 
-app = FastAPI(title="AI Share Manager API", version="1.7")
+app = FastAPI(title="AI Share Manager API", version="1.9")
 
 start_keepalive_thread()
+
+SESSIONS_DIR = "/app/sessions"
+LINKS_FILE = os.path.join(SESSIONS_DIR, "links_bare.json")
+QUEUE_FILE = os.path.join(SESSIONS_DIR, "queue.json")
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36"
 
 
 class ShareRequest(BaseModel):
     prompt: str
     account: str | None = None
-    type: str = "aimode"  # "aimode" (gratis, propio) | "bare" (AKR) | "linkcard" (Android del VPS)
+    type: str = "aimode"  # "aimode" (propio, gratis) | "linkcard" (Android del VPS)
 
 
 class CookieUpload(BaseModel):
     account: str = "primary"
     cookies: object  # array JSON de cookies O string "SID=..; HSID=.."
     mode: str = "replace"  # "replace" sobrescribe | "merge" suma/actualiza por nombre
-
-
-class AkrSessionUpload(BaseModel):
-    cookie: str  # el valor completo de la cookie gshort.sid=... del navegador
 
 
 class StorageStateUpload(BaseModel):
@@ -74,11 +87,6 @@ def health():
 
 @app.post("/generate")
 def create_share_link(request: ShareRequest):
-    if request.type == "bare":
-        try:
-            return crear_bare_link(request.prompt)
-        except RuntimeError as e:
-            raise HTTPException(status_code=502, detail={"ok": False, "provider": "akr", "error": str(e)})
     if request.type == "linkcard":
         result = generar_linkcard(request.prompt)
         if not result.get("ok"):
@@ -93,40 +101,6 @@ def create_share_link(request: ShareRequest):
 @app.get("/android/status")
 def android_status():
     return android_diagnostico()
-
-
-@app.post("/akr-session/upload")
-def upload_akr_session(payload: AkrSessionUpload):
-    """Sube la cookie de sesion de AKR (gshort.sid) para el proveedor bare."""
-    os.makedirs(SESSIONS_DIR, exist_ok=True)
-    cookie = payload.cookie.strip()
-    if not cookie.startswith("gshort.sid="):
-        cookie = "gshort.sid=" + cookie
-    with open(os.path.join(SESSIONS_DIR, "akr_cookie.txt"), "w", encoding="utf-8") as f:
-        f.write(cookie)
-    return {"ok": True, "message": "Sesion AKR guardada"}
-
-
-@app.get("/akr-session/status")
-def akr_session_status():
-    path = os.path.join(SESSIONS_DIR, "akr_cookie.txt")
-    exists = os.path.exists(path)
-    remaining = None
-    if exists:
-        try:
-            from provider_akr import _csrf
-            import requests as _r
-
-            s = _r.Session()
-            s.headers["Cookie"] = open(path, encoding="utf-8").read().strip()
-            s.headers["User-Agent"] = "Mozilla/5.0 Chrome/131"
-            r = s.get("https://akrshortener.com/subscription", timeout=20)
-            txt = re.sub(r"<[^>]+>", "\n", r.text)
-            m = re.findall(r"(\d+)\s+links?\s+available", txt)
-            remaining = int(m[0]) if m else None
-        except Exception as e:  # noqa: BLE001
-            return {"session": exists, "valid": False, "error": str(e)[:120]}
-    return {"session": exists, "links_available": remaining}
 
 
 @app.post("/session/cookies")
@@ -232,3 +206,118 @@ def delete_session(account: str):
         os.remove(path)
         return {"ok": True, "deleted": account}
     raise HTTPException(status_code=404, detail={"error": "sesion_no_encontrada"})
+
+
+# ---------- Enlaces bare (tokens acuñados desde el iPhone del operador o por worker) ----------
+
+def _load_json(path: str, default):
+    try:
+        return json.load(open(path, encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def _save_json(path: str, data) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    json.dump(data, open(path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
+
+
+def _resolver_cadena(code: str) -> dict:
+    """Sigue la cadena de redirección del token y devuelve estado + destino final."""
+    token = code.strip().rstrip("/")
+    for prefix in ("https://www.google.com/share.google?q=", "https://share.google/"):
+        if token.startswith(prefix):
+            token = token[len(prefix):]
+    url = f"https://www.google.com/share.google?q={token}"
+    estado = "desconocido"
+    destino = None
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        resp = urllib.request.urlopen(req, timeout=25)
+        head = resp.read(4096).decode("utf-8", errors="ignore")
+        if "Something went wrong" in head or "no está disponible" in head or "isn't available" in head:
+            estado = "muerto"
+        elif "share.google" not in resp.url:
+            estado = "vivo"
+            destino = resp.url
+        else:
+            estado = "vivo_render_js"
+            destino = resp.url
+    except Exception as e:  # noqa: BLE001
+        estado = f"error: {str(e)[:120]}"
+    return {"url_consulta": url, "estado": estado, "destino": destino}
+
+
+class BareLink(BaseModel):
+    code: str
+    nota: str = ""
+
+
+@app.post("/links/bare")
+def links_bare(payload: BareLink):
+    """Registra un token acuñado (p. ej. desde el iPhone), lo valida y lo cataloga."""
+    raw = payload.code.strip()
+    m = re.search(r"(?:q=)?([A-Za-z0-9_\-]{8,40})/?$", raw)
+    if not m:
+        raise HTTPException(status_code=400, detail={"error": "codigo_invalido"})
+    code = m.group(1)
+
+    links = _load_json(LINKS_FILE, {})
+    if code in links:
+        links[code]["verificado"] = _resolver_cadena(code)
+        links[code]["ultima_verificacion"] = int(time.time())
+        _save_json(LINKS_FILE, links)
+        return {"ok": True, "duplicado": True, **links[code]}
+
+    verif = _resolver_cadena(code)
+    entry = {
+        "code": code,
+        "link": f"https://www.google.com/share.google?q={code}",
+        "nota": payload.nota,
+        "creado": int(time.time()),
+        "verificado": verif,
+        "ultima_verificacion": int(time.time()),
+    }
+    links[code] = entry
+    _save_json(LINKS_FILE, links)
+    return {"ok": True, "duplicado": False, **entry}
+
+
+@app.get("/links/list")
+def links_list():
+    links = _load_json(LINKS_FILE, {})
+    return JSONResponse({"total": len(links), "links": list(links.values())})
+
+
+@app.get("/links/check/{code}")
+def links_check(code: str):
+    links = _load_json(LINKS_FILE, {})
+    if code not in links:
+        raise HTTPException(status_code=404, detail={"error": "link_no_encontrado"})
+    links[code]["verificado"] = _resolver_cadena(code)
+    links[code]["ultima_verificacion"] = int(time.time())
+    _save_json(LINKS_FILE, links)
+    return links[code]
+
+
+class QueueItem(BaseModel):
+    url: str
+
+
+@app.post("/links/queue")
+def queue_add(item: QueueItem):
+    q = _load_json(QUEUE_FILE, [])
+    q.append({"url": item.url, "queued_at": int(time.time())})
+    _save_json(QUEUE_FILE, q)
+    return {"ok": True, "posicion": len(q)}
+
+
+@app.get("/links/queue")
+def queue_take():
+    """El worker toma el siguiente trabajo (FIFO)."""
+    q = _load_json(QUEUE_FILE, [])
+    if not q:
+        return {"url": None}
+    item = q.pop(0)
+    _save_json(QUEUE_FILE, q)
+    return item
