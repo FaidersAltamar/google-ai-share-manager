@@ -2,7 +2,6 @@
 
 Proveedores 100% propios (sin servicios de terceros):
 - aimode: conversación AI Mode compartida (funciona hoy, gratis)
-- linkcard: app Google en Android del VPS (requiere Android vivo; módulo linkcard_adb)
 - registro manual de tokens acuñados desde el iPhone del operador (/links/bare)
 
 Gestión de sesiones:
@@ -14,7 +13,7 @@ Gestión de sesiones:
 Enlaces bare (token acuñado manualmente o por worker):
 - POST /links/bare   → registra un código share.google, valida cadena, cataloga y devuelve link final
 - GET  /links/list   → catálogo con estado de verificación
-- POST /links/queue  → encola URL para el worker ADB
+- POST /links/queue  → encola URL para procesamiento externo
 - GET  /links/queue  → el worker toma el siguiente trabajo
 """
 import json
@@ -29,7 +28,6 @@ from pydantic import BaseModel
 
 from generate_share_link import generate_ai_share_link
 from keepalive import SESSIONS_DIR, STATE_FILE, start_keepalive_thread
-from linkcard_adb import diagnostico as android_diagnostico, generar_linkcard
 from session_utils import build_storage_state, parse_cookies
 
 app = FastAPI(title="AI Share Manager API", version="1.9")
@@ -45,7 +43,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36"
 class ShareRequest(BaseModel):
     prompt: str
     account: str | None = None
-    type: str = "aimode"  # "aimode" (propio, gratis) | "linkcard" (Android del VPS)
+    type: str = "aimode"  # aimode (propio, gratis)
 
 
 class CookieUpload(BaseModel):
@@ -87,20 +85,10 @@ def health():
 
 @app.post("/generate")
 def create_share_link(request: ShareRequest):
-    if request.type == "linkcard":
-        result = generar_linkcard(request.prompt)
-        if not result.get("ok"):
-            raise HTTPException(status_code=502, detail=result)
-        return result
     result = generate_ai_share_link(request.prompt, request.account)
     if not result.get("ok"):
         raise HTTPException(status_code=502, detail=result)
     return result
-
-
-@app.get("/android/status")
-def android_status():
-    return android_diagnostico()
 
 
 @app.post("/session/cookies")
