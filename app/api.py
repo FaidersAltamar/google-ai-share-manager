@@ -30,6 +30,7 @@ class ShareRequest(BaseModel):
 class CookieUpload(BaseModel):
     account: str = "primary"
     cookies: object  # array JSON de cookies O string "SID=..; HSID=.."
+    mode: str = "replace"  # "replace" sobrescribe | "merge" suma/actualiza por nombre
 
 
 class StorageStateUpload(BaseModel):
@@ -80,23 +81,41 @@ def upload_cookies(payload: CookieUpload):
       - String header: "SID=abc; HSID=def; SAPISID=xyz"
     """
     try:
-        cookies = parse_cookies(payload.cookies)
+        new_cookies = parse_cookies(payload.cookies)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail={"error": "formato_invalido", "detail": str(e)})
 
-    if not cookies:
+    if not new_cookies:
         raise HTTPException(status_code=400, detail={"error": "sin_cookies_utiles"})
-    if not any(c["name"] in ("SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID", "SSID", "HSID") for c in cookies):
+    if not any(c["name"] in ("SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID", "SSID", "HSID") for c in new_cookies):
         raise HTTPException(
             status_code=400,
             detail={"error": "parece_no_ser_sesion_google", "hint": "Debe incluir cookies de sesión de Google (SAPISID/HSID/SSID...)"},
         )
 
     path = _session_path(payload.account)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(build_storage_state(cookies), f)
+    existing: dict = {}
+    if payload.mode == "merge" and os.path.exists(path):
+        try:
+            for c in json.load(open(path, encoding="utf-8")).get("cookies", []):
+                existing[c["name"]] = c
+        except Exception:
+            existing = {}
+    for c in new_cookies:
+        existing[c["name"]] = c
+    merged = list(existing.values())
 
-    return {"ok": True, "account": payload.account, "cookies": len(cookies), "file": path}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(build_storage_state(merged), f)
+
+    return {
+        "ok": True,
+        "account": payload.account,
+        "cookies": len(merged),
+        "added_this_request": len(new_cookies),
+        "mode": payload.mode,
+        "file": path,
+    }
 
 
 @app.post("/session/storage-state")
