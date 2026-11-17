@@ -56,7 +56,7 @@ def keepalive_loop() -> None:
             os.makedirs(SESSIONS_DIR, exist_ok=True)
             state = _load_state()
             for fname in os.listdir(SESSIONS_DIR):
-                if not fname.endswith(".json") or fname.startswith("_"):
+                if not fname.endswith(".json") or fname.startswith(("_", "links_bare", "akr_cookie")):
                     continue
                 path = os.path.join(SESSIONS_DIR, fname)
                 account = fname[:-5]
