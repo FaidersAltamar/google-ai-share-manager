@@ -1,0 +1,13 @@
+{
+  "default_account": "primary",
+  "delay_between_actions": 1.5,
+  "max_retries_per_link": 3,
+  "use_corporate_proxy": false,
+  "proxy_url": "http://user:pass@proxy-ip:port",
+  "accounts": [
+    {
+      "name": "primary",
+      "session_file": "/app/sessions/primary.json"
+    }
+  ]
+}

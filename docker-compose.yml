@@ -1,0 +1,18 @@
+services:
+  ai-share-manager:
+    build: .
+    container_name: ai-share-manager
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app/sessions:/app/sessions
+    networks:
+      - ai-share-net
+    environment:
+      - TZ=America/Bogota
+
+networks:
+  ai-share-net:
+    name: ai-share-net
+    driver: bridge
