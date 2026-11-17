@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from generate_share_link import generate_ai_share_link
 from keepalive import SESSIONS_DIR, STATE_FILE, start_keepalive_thread
+from linkcard_adb import diagnostico as android_diagnostico, generar_linkcard
 from provider_akr import crear_bare_link
 from session_utils import build_storage_state, parse_cookies
 
@@ -27,7 +28,7 @@ start_keepalive_thread()
 class ShareRequest(BaseModel):
     prompt: str
     account: str | None = None
-    type: str = "aimode"  # "aimode" (gratis, propio) | "bare" (AKR, proxy-render directo)
+    type: str = "aimode"  # "aimode" (gratis, propio) | "bare" (AKR) | "linkcard" (Android del VPS)
 
 
 class CookieUpload(BaseModel):
@@ -78,10 +79,20 @@ def create_share_link(request: ShareRequest):
             return crear_bare_link(request.prompt)
         except RuntimeError as e:
             raise HTTPException(status_code=502, detail={"ok": False, "provider": "akr", "error": str(e)})
+    if request.type == "linkcard":
+        result = generar_linkcard(request.prompt)
+        if not result.get("ok"):
+            raise HTTPException(status_code=502, detail=result)
+        return result
     result = generate_ai_share_link(request.prompt, request.account)
     if not result.get("ok"):
         raise HTTPException(status_code=502, detail=result)
     return result
+
+
+@app.get("/android/status")
+def android_status():
+    return android_diagnostico()
 
 
 @app.post("/akr-session/upload")
