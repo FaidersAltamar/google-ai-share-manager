@@ -345,9 +345,7 @@ async function reg(b){b.disabled=1;const o=document.getElementById('out2');o.sty
 try{const r=await fetch('/links/bare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.getElementById('code').value,nota:document.getElementById('nota').value})});
 const j=await r.json();if(j.ok){const v=j.verificado||{};o.innerHTML='<span class=ok>✅ Registrado</span><br>Link: <a href="'+j.link+'" target=_blank>'+j.link+'</a><br>Estado: '+(v.estado||'?')+(v.destino?'<br>Destino: <a href="'+v.destino+'">'+v.destino+'</a>':'')}else{o.innerHTML='<span class=err>❌ '+JSON.stringify(j).slice(0,300)+'</span>'}}catch(e){o.innerHTML='<span class=err>❌ '+e+'</span>'}b.disabled=0}
 async function listar(){const o=document.getElementById('out3');o.style.display='block';o.className='out';o.textContent='Cargando...';
-try{const r=await fetch('/links/list');const j=await r.json();o.textContent=j.total+' enlaces:
-'+j.links.map(l=>l.link+'  ['+(l.verificado&&l.verificado.estado||'?')+'] '+(l.nota||'')).join('
-')}catch(e){o.textContent='ERR '+e}}
+try{const r=await fetch('/links/list');const j=await r.json();o.textContent=j.total+' enlaces:'+String.fromCharCode(10)+j.links.map(l=>l.link+'  ['+(l.verificado&&l.verificado.estado||'?')+'] '+(l.nota||'')).join(String.fromCharCode(10))}catch(e){o.textContent='ERR '+e}}
 </script>"""
 
 
