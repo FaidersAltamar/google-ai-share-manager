@@ -157,39 +157,47 @@ def generate_ai_share_link(prompt_content: str, account_name: str | None = None)
                 share_btn.first.click(timeout=10000)
                 time.sleep(delay * 2)
 
-                # Crea el enlace público (múltiples estrategias de texto)
-                link_clicked = False
-                for strat in (
-                    page.get_by_text("Crear enlace público"),
-                    page.get_by_text("Create public link"),
-                    page.get_by_role("menuitem", name=re.compile("enlace|link", re.I)),
-                    page.get_by_role("button", name=re.compile("enlace|link", re.I)),
-                    page.get_by_text(re.compile("crear.{0,10}enlace|create.{0,10}link", re.I)),
-                ):
+                # Tras pulsar Compartir, Google genera el enlace automaticamente en el modal.
+                # Polling amplio: cualquier input/textarea cuyo valor sea un enlace de share.
+                share_link = ""
+                deadline = time.time() + 20
+                while time.time() < deadline and not share_link:
                     try:
-                        if strat.count() > 0:
-                            strat.first.click(timeout=3000)
-                            link_clicked = True
-                            break
+                        for el in page.query_selector_all("input, textarea"):
+                            try:
+                                v = (el.input_value() or el.get_attribute("value") or "").strip()
+                                if v and ("share.google" in v or "google.com/share" in v):
+                                    share_link = v
+                                    break
+                            except Exception:
+                                continue
                     except Exception:
-                        continue
+                        pass
+                    if not share_link:
+                        time.sleep(0.8)
 
-                if not link_clicked:
+                if not share_link:
+                    input_vals = []
+                    try:
+                        for el in page.query_selector_all("input, textarea"):
+                            try:
+                                v = (el.input_value() or "").strip()
+                                if v:
+                                    input_vals.append(v[:120])
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
                     texts = _clickable_texts(page)
-                    shot = _debug_shot(page, "share_menu")
+                    shot = _debug_shot(page, "modal")
                     return {
                         "ok": False,
-                        "error": "no_encontre_boton_crear_enlace",
-                        "hint": "Textos visibles en la UI tras abrir el menu Compartir",
+                        "error": "modal_sin_enlace_share",
+                        "input_values": input_vals[:10],
                         "ui_texts": texts,
                         "screenshot": shot,
                         "content": prompt_content,
                     }
-                time.sleep(delay * 2)
-
-                # Extrae el enlace generado
-                share_input = page.locator("input[value*='share.google']").first
-                share_link = share_input.input_value(timeout=10000)
 
                 save_user_session(context, account["session_file"])
 
