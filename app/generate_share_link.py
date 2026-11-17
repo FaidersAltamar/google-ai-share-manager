@@ -2,6 +2,7 @@
 de Google AI Mode, automatizando el flujo oficial de Compartir."""
 import json
 import os
+import re
 import time
 
 from playwright.sync_api import BrowserContext, sync_playwright
@@ -55,6 +56,33 @@ def load_user_session(playwright, session_path: str, proxy: str | None):
 
     context = browser.new_context(**context_kwargs)
     return browser, context
+
+
+def _clickable_texts(page) -> list:
+    """Textos visibles de todos los elementos clicables (para diagnóstico de UI)."""
+    out = []
+    try:
+        for e in page.query_selector_all("button, [role='menuitem'], [role='button'], [role='option'], a"):
+            try:
+                t = (e.inner_text() or "").strip().replace("\n", " ")
+                if t and len(t) < 70 and t not in out:
+                    out.append(t)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
+
+def _debug_shot(page, tag: str) -> str:
+    try:
+        d = "/app/sessions/debug"
+        os.makedirs(d, exist_ok=True)
+        path = f"{d}/{tag}_{int(time.time())}.png"
+        page.screenshot(path=path, full_page=False)
+        return path
+    except Exception:
+        return ""
 
 
 def generate_ai_share_link(prompt_content: str, account_name: str | None = None) -> dict:
@@ -111,18 +139,52 @@ def generate_ai_share_link(prompt_content: str, account_name: str | None = None)
                 input_box.press("Enter")
                 time.sleep(delay * 4)  # espera la respuesta de AI Mode
 
-                # Pulsa Compartir
-                share_btn = page.get_by_label("Compartir", exact=True)
-                if share_btn.count() == 0:
-                    share_btn = page.get_by_label("Share", exact=True)
+                # Pulsa Compartir (estrategias múltiples)
+                share_btn = None
+                for strat in (
+                    page.get_by_label("Compartir", exact=True),
+                    page.get_by_label("Share", exact=True),
+                    page.get_by_role("button", name=re.compile("compartir|share", re.I)),
+                ):
+                    try:
+                        if strat.count() > 0:
+                            share_btn = strat
+                            break
+                    except Exception:
+                        continue
+                if share_btn is None:
+                    share_btn = page.get_by_label(re.compile("compartir|share", re.I))
                 share_btn.first.click(timeout=10000)
-                time.sleep(delay)
+                time.sleep(delay * 2)
 
-                # Crea el enlace público
-                create_link = page.get_by_text("Crear enlace público")
-                if create_link.count() == 0:
-                    create_link = page.get_by_text("Create public link")
-                create_link.first.click(timeout=5000)
+                # Crea el enlace público (múltiples estrategias de texto)
+                link_clicked = False
+                for strat in (
+                    page.get_by_text("Crear enlace público"),
+                    page.get_by_text("Create public link"),
+                    page.get_by_role("menuitem", name=re.compile("enlace|link", re.I)),
+                    page.get_by_role("button", name=re.compile("enlace|link", re.I)),
+                    page.get_by_text(re.compile("crear.{0,10}enlace|create.{0,10}link", re.I)),
+                ):
+                    try:
+                        if strat.count() > 0:
+                            strat.first.click(timeout=3000)
+                            link_clicked = True
+                            break
+                    except Exception:
+                        continue
+
+                if not link_clicked:
+                    texts = _clickable_texts(page)
+                    shot = _debug_shot(page, "share_menu")
+                    return {
+                        "ok": False,
+                        "error": "no_encontre_boton_crear_enlace",
+                        "hint": "Textos visibles en la UI tras abrir el menu Compartir",
+                        "ui_texts": texts,
+                        "screenshot": shot,
+                        "content": prompt_content,
+                    }
                 time.sleep(delay * 2)
 
                 # Extrae el enlace generado

@@ -146,6 +146,28 @@ def session_list():
     return JSONResponse({"sessions": sessions})
 
 
+@app.get("/debug/list")
+def debug_list():
+    d = os.path.join(SESSIONS_DIR, "debug")
+    if not os.path.isdir(d):
+        return {"files": []}
+    files = sorted(
+        (f, os.path.getsize(os.path.join(d, f))) for f in os.listdir(d) if f.endswith(".png")
+    )
+    return {"files": [{"name": n, "bytes": s} for n, s in files]}
+
+
+@app.get("/debug/{name}")
+def debug_get(name: str):
+    safe = os.path.basename(name)
+    path = os.path.join(SESSIONS_DIR, "debug", safe)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail={"error": "archivo_no_encontrado"})
+    from fastapi.responses import FileResponse
+
+    return FileResponse(path, media_type="image/png")
+
+
 @app.delete("/session/{account}")
 def delete_session(account: str):
     path = _session_path(account)
