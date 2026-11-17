@@ -309,3 +309,51 @@ def queue_take():
     item = q.pop(0)
     _save_json(QUEUE_FILE, q)
     return item
+
+# ---------- Panel web propio ----------
+PANEL_HTML = """<!doctype html><html lang=es><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>AI Share Manager</title>
+<style>
+body{font-family:system-ui;background:#0f172a;color:#e2e8f0;margin:0;padding:16px;max-width:640px;margin-inline:auto}
+h1{font-size:1.2rem} h2{font-size:1rem;margin-top:24px}
+input,textarea{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font-size:1rem;margin:6px 0}
+button{background:#2563eb;color:#fff;border:0;padding:12px 18px;border-radius:8px;font-size:1rem;width:100%}
+button:disabled{opacity:.5}
+.out{background:#1e293b;border-radius:8px;padding:10px;margin-top:8px;word-break:break-all;white-space:pre-wrap;display:none}
+a{color:#60a5fa}
+.ok{color:#4ade80}.err{color:#f87171}
+</style>
+<h1>AI Share Manager</h1>
+<h2>1. Generar enlace google.com (automatico)</h2>
+<input id=url placeholder="https://tu-url.com">
+<button onclick="gen(this)">Generar enlace</button>
+<div id=out1 class=out></div>
+<h2>2. Registrar token bare (acuñado desde tu iPhone)</h2>
+<p style="color:#94a3b8;font-size:.85rem;margin:4px 0">Safari → abrir la web → Compartir → Google → copiar el enlace que crea la app → pegalo aqui. Queda validado y catalogado.</p>
+<textarea id=code rows=2 placeholder="https://share.google/TOKEN o solo el TOKEN"></textarea>
+<input id=nota placeholder="Nota (opcional)">
+<button onclick="reg(this)">Registrar y validar</button>
+<div id=out2 class=out></div>
+<h2>3. Catalogo</h2>
+<button onclick="listar()">Ver enlaces registrados</button>
+<div id=out3 class=out></div>
+<script>
+async function gen(b){b.disabled=1;const o=document.getElementById('out1');o.style.display='block';o.className='out';o.textContent='Generando (tarda ~2 min)...';
+try{const r=await fetch('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:document.getElementById('url').value})});
+const j=await r.json();if(j.ok){o.innerHTML='<span class=ok>✅ Enlace creado:</span><br><a href="'+j.share_url+'" target=_blank>'+j.share_url+'</a><br><br>Formato google.com/share.google?q=<br><a href="https://www.google.com/share.google?q='+j.share_url.split('/').pop()+'" target=_blank>https://www.google.com/share.google?q='+j.share_url.split('/').pop()+'</a>'}else{o.innerHTML='<span class=err>❌ '+JSON.stringify(j).slice(0,300)+'</span>'}}catch(e){o.innerHTML='<span class=err>❌ '+e+'</span>'}b.disabled=0}
+async function reg(b){b.disabled=1;const o=document.getElementById('out2');o.style.display='block';o.className='out';o.textContent='Validando...';
+try{const r=await fetch('/links/bare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.getElementById('code').value,nota:document.getElementById('nota').value})});
+const j=await r.json();if(j.ok){const v=j.verificado||{};o.innerHTML='<span class=ok>✅ Registrado</span><br>Link: <a href="'+j.link+'" target=_blank>'+j.link+'</a><br>Estado: '+(v.estado||'?')+(v.destino?'<br>Destino: <a href="'+v.destino+'">'+v.destino+'</a>':'')}else{o.innerHTML='<span class=err>❌ '+JSON.stringify(j).slice(0,300)+'</span>'}}catch(e){o.innerHTML='<span class=err>❌ '+e+'</span>'}b.disabled=0}
+async function listar(){const o=document.getElementById('out3');o.style.display='block';o.className='out';o.textContent='Cargando...';
+try{const r=await fetch('/links/list');const j=await r.json();o.textContent=j.total+' enlaces:
+'+j.links.map(l=>l.link+'  ['+(l.verificado&&l.verificado.estado||'?')+'] '+(l.nota||'')).join('
+')}catch(e){o.textContent='ERR '+e}}
+</script>"""
+
+
+from fastapi.responses import HTMLResponse
+
+
+@app.get("/app", response_class=HTMLResponse)
+def panel():
+    return PANEL_HTML
