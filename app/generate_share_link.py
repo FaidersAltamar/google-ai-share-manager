@@ -99,7 +99,29 @@ def generate_ai_share_link(prompt_content: str, account_name: str | None = None)
         try:
             with sync_playwright() as p:
                 browser, context = load_user_session(p, account["session_file"], proxy)
+                try:
+                    context.grant_permissions(["clipboard-read", "clipboard-write"], origin="https://www.google.com")
+                except Exception:
+                    pass
                 page = context.new_page()
+
+                # Captura de red: cualquier respuesta que contenga un enlace share.google
+                captured: list = []
+
+                def _on_response(resp):
+                    try:
+                        ct = (resp.headers or {}).get("content-type", "")
+                        if "json" not in ct and "text" not in ct and "protobuf" not in ct:
+                            return
+                        body = resp.text()
+                        if body and "share.google/" in body:
+                            m = re.search(r"https://share\.google/[A-Za-z0-9_\-]+", body)
+                            if m:
+                                captured.append(m.group(0))
+                    except Exception:
+                        pass
+
+                page.on("response", _on_response)
 
                 page.goto(
                     "https://www.google.com/search?q=ai+mode&udm=50",
@@ -157,24 +179,52 @@ def generate_ai_share_link(prompt_content: str, account_name: str | None = None)
                 share_btn.first.click(timeout=10000)
                 time.sleep(delay * 2)
 
-                # Tras pulsar Compartir, Google genera el enlace automaticamente en el modal.
-                # Polling amplio: cualquier input/textarea cuyo valor sea un enlace de share.
+                # La UI actual: botón "Copy link" copia el enlace al portapapeles
                 share_link = ""
-                deadline = time.time() + 20
-                while time.time() < deadline and not share_link:
+                clicked_copy = False
+                for strat in (
+                    page.get_by_role("button", name=re.compile(r"^copy link$|^copiar enlace$|^copiar link$", re.I)),
+                    page.get_by_text(re.compile(r"^copy link$|^copiar enlace$|^copiar link$", re.I)),
+                    page.get_by_role("button", name=re.compile("copy", re.I)),
+                ):
                     try:
-                        for el in page.query_selector_all("input, textarea"):
-                            try:
-                                v = (el.input_value() or el.get_attribute("value") or "").strip()
-                                if v and ("share.google" in v or "google.com/share" in v):
-                                    share_link = v
-                                    break
-                            except Exception:
-                                continue
+                        if strat.count() > 0:
+                            strat.first.click(timeout=3000)
+                            clicked_copy = True
+                            break
+                    except Exception:
+                        continue
+
+                if clicked_copy:
+                    time.sleep(1.2)
+                    try:
+                        clip = page.evaluate("() => navigator.clipboard.readText()")
+                        if clip and "share.google" in clip:
+                            share_link = clip.strip()
                     except Exception:
                         pass
-                    if not share_link:
-                        time.sleep(0.8)
+
+                # Fallback 1: enlace capturado del trafico de red
+                if not share_link and captured:
+                    share_link = captured[-1]
+
+                # Fallback 2: polling de inputs (por si la UI vuelve a mostrar el input)
+                if not share_link:
+                    deadline = time.time() + 8
+                    while time.time() < deadline and not share_link:
+                        try:
+                            for el in page.query_selector_all("input, textarea"):
+                                try:
+                                    v = (el.input_value() or el.get_attribute("value") or "").strip()
+                                    if v and ("share.google" in v or "google.com/share" in v):
+                                        share_link = v
+                                        break
+                                except Exception:
+                                    continue
+                        except Exception:
+                            pass
+                        if not share_link:
+                            time.sleep(0.8)
 
                 if not share_link:
                     input_vals = []
@@ -195,6 +245,7 @@ def generate_ai_share_link(prompt_content: str, account_name: str | None = None)
                         "error": "modal_sin_enlace_share",
                         "input_values": input_vals[:10],
                         "ui_texts": texts,
+                        "network_captured": captured[:5],
                         "screenshot": shot,
                         "content": prompt_content,
                     }
