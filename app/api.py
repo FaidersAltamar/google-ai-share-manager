@@ -54,7 +54,7 @@ def _keepalive_state() -> dict:
 def health():
     sessions = []
     if os.path.isdir(SESSIONS_DIR):
-        sessions = [f[:-5] for f in os.listdir(SESSIONS_DIR) if f.endswith(".json")]
+        sessions = [f[:-5] for f in os.listdir(SESSIONS_DIR) if f.endswith(".json") and not f.startswith("_")]
     return {
         "status": "ok",
         "message": "AI Share Manager operativo",

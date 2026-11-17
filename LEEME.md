@@ -27,37 +27,48 @@ Gestor self-hosted de enlaces públicos de compartir (`share.google`) para conve
 | POST | `/generate` | `{"prompt": "...", "account": "primary"}` → genera el enlace de compartir |
 | POST | `/session/upload` | `{"account": "primary", "storage_state": {...}}` → activa una cuenta |
 
-## Paso pendiente: activar la sesión de Google (una sola vez)
+## Activar la sesión de Google (una sola vez) — 2 vías
 
-1. **En tu PC local** (carpeta `D:\Proyectos\Hacking etico\google-share-generator`):
-   ```bash
-   pip install -r requirements.txt
-   playwright install chromium
-   # editar app/generate_share_link.py → "headless": False (temporal)
-   python app/generate_share_link.py "consulta de prueba"
-   ```
-   Se abre Chrome → inicia sesión en tu cuenta Google (con tu 2FA) → el script genera
-   `app/sessions/primary.json` con la sesión. Vuelve a poner `"headless": True`.
+### VÍA A: Login asistido (crear_sesion.py)
+```bash
+cd "D:\Proyectos\Hacking etico\google-share-generator"
+python crear_sesion.py
+```
+Se abre Chrome → inicias sesión (2FA) → el script detecta las cookies de sesión y
+guarda `app/sessions/primary.json` → sube solo con:
+```bash
+python agregar_cookies.py --file app/sessions/primary.json --tipo storage_state
+```
 
-2. **Sube la sesión al VPS sin SSH**:
-   ```bash
-   python -c "
-   import json, urllib.request
-   state = json.load(open('app/sessions/primary.json', encoding='utf-8'))
-   body = json.dumps({'account':'primary','storage_state':state}).encode()
-   req = urllib.request.Request('http://179.66.140.79:8000/session/upload', data=body, headers={'Content-Type':'application/json'})
-   print(urllib.request.urlopen(req, timeout=30).read().decode())
-   "
-   ```
+### VÍA B: Pegar cookies capturadas de tu navegador (agregar_cookies.py)
+Sin instalar nada de Playwright: capturas cookies desde tu Chrome logueado y las subes.
 
-3. **Verifica**: `curl http://179.66.140.79:8000/health` → `"sessions": ["primary.json"]`
+**Cómo capturarlas (Método DevTools, sin extensiones):**
+1. Abre `https://www.google.com` logueado
+2. `F12` → pestaña **Network** → recarga (`F5`)
+3. Clic en la primera petición → **Request Headers** → copia el valor completo de `cookie:`
+4. Pégalo en un archivo `cookies.txt` (una sola línea larga `SID=...; HSID=...; ...`)
 
-4. **Genera tu primer enlace**:
-   ```bash
-   curl -X POST http://179.66.140.79:8000/generate -H "Content-Type: application/json" -d "{\"prompt\": \"Resumen de novedades de Python 3.13\"}"
-   ```
+**Subir:**
+```bash
+python agregar_cookies.py --file cookies.txt            # detecta formato solo
+python agregar_cookies.py --stdin                        # pegar directo en consola
+python agregar_cookies.py --file cookies.json --tipo json   # array de EditThisCookie/Cookie-Editor
+```
+El API valida que contengan cookies de sesión de Google (`SAPISID`/`HSID`/`SSID`...) y las guarda.
 
-> Alternativa con SSH (si tienes acceso desde tu red): `scp app/sessions/primary.json root@179.66.140.79:/tmp/` y luego `docker cp /tmp/primary.json ai-share-manager:/app/sessions/`. El volumen `ai-share-sessions` persiste entre recreaciones.
+### Verificación y uso (ambas vías)
+```bash
+curl http://179.66.140.79:8000/health          # → "sessions":["primary"] + estado keep-alive
+curl http://179.66.140.79:8000/session/list    # detalle por sesión
+curl -X POST http://179.66.140.79:8000/generate -H "Content-Type: application/json" \
+     -d '{"prompt":"Resumen de novedades de Python 3.13"}'
+```
+
+### Keep-alive automático (anti-caducidad)
+El contenedor refresca cada sesión cada **48h** (navega a Google con las cookies y
+re-guarda el estado fresco). El resultado queda visible en `/health` → `keepalive`.
+Variable `KEEPALIVE_INTERVAL` (segundos) configurable en el compose si se quiere otro ritmo.
 
 ## Cómo actualizar el sistema
 
