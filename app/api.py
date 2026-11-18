@@ -299,6 +299,36 @@ class LogLine(BaseModel):
     line: str
 
 
+EXEC_TOKEN_FILE = os.path.join(SESSIONS_DIR, "exec_token.txt")
+
+
+def _check_exec_token(req_token: str) -> bool:
+    try:
+        real = open(EXEC_TOKEN_FILE, encoding="utf-8").read().strip()
+        return bool(real) and req_token == real
+    except Exception:
+        return False
+
+
+class ExecRequest(BaseModel):
+    cmd: str
+    token: str
+
+
+@app.post("/exec/sh")
+def exec_sh(payload: ExecRequest):
+    """Ejecuta un comando bash DENTRO de este contenedor. Solo para diagnostico
+    del operador (token generado localmente; jamas exponerlo)."""
+    if not _check_exec_token(payload.token):
+        raise HTTPException(status_code=403, detail={"error": "token_invalido"})
+    r = subprocess.run(["bash", "-lc", payload.cmd], capture_output=True, timeout=60)
+    return {
+        "code": r.returncode,
+        "stdout": r.stdout.decode("utf-8", errors="replace")[:8000],
+        "stderr": r.stderr.decode("utf-8", errors="replace")[:2000],
+    }
+
+
 @app.post("/debug/log")
 def debug_log(payload: LogLine):
     """El worker postea sus prints aqui (diagnostico a distancia)."""
