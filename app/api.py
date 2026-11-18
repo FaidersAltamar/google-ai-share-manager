@@ -19,6 +19,9 @@ Enlaces bare (token acuñado manualmente o por worker):
 import json
 import os
 import re
+import subprocess
+import time
+import urllib.request
 import time
 import urllib.request
 
