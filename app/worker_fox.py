@@ -240,11 +240,21 @@ def acunar(url: str) -> dict:
             pass
 
 
+def ensure_deps():
+    try:
+        import paramiko  # noqa
+        return
+    except ImportError:
+        subprocess.run([sys.executable, "-m", "pip", "install", "--no-cache-dir", "paramiko"],
+                       timeout=180)
+
+
 def main():
     # validar credenciales foxphone
     if not FP_EMAIL or not FP_PASS:
         print("FALTA FP_EMAIL/FP_PASS"); sys.exit(1)
     ensure_adb()
+    ensure_deps()
     log("worker foxphone iniciado")
     while True:
         try:
