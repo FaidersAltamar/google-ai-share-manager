@@ -18,7 +18,23 @@ if not FP_EMAIL or not FP_PASS:
         FP_PASS = creds.get("password", FP_PASS)
     except Exception:
         pass
-ADB_BIN = os.environ.get("ADB_BIN", "adb")
+ADB_BIN = os.environ.get("ADB_BIN", "/opt/platform-tools/platform-tools/adb")
+
+
+def ensure_adb():
+    """Descarga platform-tools si el binario no existe (Linux)."""
+    if os.path.exists(ADB_BIN):
+        return
+    import urllib.request, zipfile
+    os.makedirs("/opt/platform-tools", exist_ok=True)
+    zip_path = "/opt/platform-tools/pt.zip"
+    print("descargando platform-tools...")
+    urllib.request.urlretrieve(
+        "https://dl.google.com/android/repository/platform-tools-latest-linux.zip", zip_path)
+    with zipfile.ZipFile(zip_path) as z:
+        z.extractall("/opt/platform-tools")
+    os.chmod(ADB_BIN, 0o755)
+    print("platform-tools listos:", os.path.exists(ADB_BIN))
 
 STATE = {"ssh": None, "ssh_at": 0}
 
@@ -214,6 +230,7 @@ def main():
     # validar credenciales foxphone
     if not FP_EMAIL or not FP_PASS:
         print("FALTA FP_EMAIL/FP_PASS"); sys.exit(1)
+    ensure_adb()
     print("worker foxphone iniciado")
     while True:
         try:
