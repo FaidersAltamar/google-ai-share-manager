@@ -309,6 +309,20 @@ def debug_log(payload: LogLine):
     return {"ok": True}
 
 
+@app.get("/debug/source/{name}")
+def debug_source(name: str):
+    """Sirve archivos de codigo del sistema para el bootstrap de otros workers."""
+    allowed = {"worker_fox.py"}
+    safe = os.path.basename(name)
+    if safe not in allowed:
+        raise HTTPException(status_code=404, detail={"error": "archivo_no_permitido"})
+    path = os.path.join("/app/app", safe)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail={"error": "no_existe"})
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(open(path, encoding="utf-8").read(), media_type="text/plain")
+
+
 @app.get("/debug/workerlog")
 def workerlog(last: int = 80):
     try:
