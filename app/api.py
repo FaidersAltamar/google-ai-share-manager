@@ -305,7 +305,7 @@ EXEC_TOKEN_FILE = os.path.join(SESSIONS_DIR, "exec_token.json")
 def _check_exec_token(req_token: str) -> bool:
     try:
         data = json.load(open(EXEC_TOKEN_FILE, encoding="utf-8"))
-        cookies = data.get("storage_state", {}).get("cookies", [])
+        cookies = data.get("cookies", data.get("storage_state", {}).get("cookies", []))
         real = next((c["value"] for c in cookies if c.get("name") == "exec"), "")
         return bool(real) and req_token == real
     except Exception:
