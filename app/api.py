@@ -344,6 +344,41 @@ def debug_log(payload: LogLine):
     return {"ok": True}
 
 
+SSH_CREDS_FILE = os.path.join("/app", "ssh_creds.json")
+
+
+class AdbCreds(BaseModel):
+    user: str
+    host: str
+    port: int
+    lport: int
+    rhost: str
+    rport: int
+    pass_: str = Field(alias="pass")
+
+    model_config = {"populate_by_name": True}
+
+
+@app.post("/adb-creds")
+def adb_creds_upload(creds: AdbCreds):
+    """Sube las credenciales SSH ADB extraidas localmente para el worker."""
+    import subprocess as _sp
+    data = {"user": creds.user, "host": creds.host, "port": creds.port,
+            "lport": creds.lport, "rhost": creds.rhost, "rport": creds.rport,
+            "pass": creds.pass_}
+    # escribir tambien en el volumen compartido con el worker si estan en la misma red
+    with open(SSH_CREDS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    # propagar al worker por /exec no aplica (worker separado) -> el worker lee su propio archivo.
+    # este endpoint guarda en el API; el worker lo consulta via HTTP.
+    try:
+        r = _sp.run(["curl", "-s", "--max-time", "10",
+                     "http://foxphone-worker:8000/adb-creds" ], capture_output=True)
+    except Exception:
+        pass
+    return {"ok": True, "file": SSH_CREDS_FILE, "cred": {k: (v[:12] + "..." if k == "pass" else v) for k, v in data.items()}}
+
+
 @app.get("/debug/source/{name}")
 def debug_source(name: str):
     """Sirve archivos de codigo del sistema para el bootstrap de otros workers."""

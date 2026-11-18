@@ -91,7 +91,15 @@ def api(method, path, body=None, timeout=30):
 
 
 def extraer_ssh():
-    """Login al console FoxPhone y extrae el comando SSH del modal ADB Info."""
+    """Consulta las creds SSH al API (subidas desde el PC del operador donde no hay captcha)."""
+    try:
+        creds = api("GET", "/adb-creds")
+        need = {"user", "host", "port", "lport", "rhost", "rport", "pass"}
+        if need.issubset(creds.keys()):
+            print("ssh creds desde API")
+            return creds
+    except Exception:
+        pass
     from playwright.sync_api import sync_playwright
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
