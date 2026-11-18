@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 .env
 .geny_token
+.foxphone_key
