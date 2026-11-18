@@ -10,17 +10,29 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 API = os.environ.get("VPS_API", "http://ai-share-manager:8000")
 
 def detect_api():
-    """El contenedor puede no alcanzar la IP publica del host (hairpin).
-    Usa el gateway de la red docker para llegar al puerto 8000 publicado."""
+    """Prueba candidatos: gateway de la red, docker0 del host (172.17.0.1).
+    El API esta publicado en 0.0.0.0:8000 del host -> reachable desde cualquier red."""
+    candidates = []
     env = os.environ.get("VPS_API", "")
+    if env:
+        candidates.append(env)
     try:
         gw = subprocess.check_output(
             "ip route | awk '/default/ {print $3}'", shell=True).decode().strip()
         if gw:
-            return f"http://{gw}:8000"
+            candidates.append(f"http://{gw}:8000")
     except Exception:
         pass
-    return env or "http://179.66.140.79:8000"
+    candidates.append("http://172.17.0.1:8000")
+    for c in candidates:
+        try:
+            raw = subprocess.check_output(
+                ["curl", "-s", "--max-time", "5", c + "/health"], timeout=15)
+            if b"status" in raw:
+                return c
+        except Exception:
+            continue
+    return candidates[0] if candidates else "http://172.17.0.1:8000"
 
 API = detect_api()
 FP_EMAIL = os.environ.get("FP_EMAIL", "")
