@@ -271,10 +271,12 @@ def acunar(url: str) -> dict:
 def ensure_deps():
     try:
         import paramiko  # noqa
+        import playwright  # noqa
         return
     except ImportError:
-        subprocess.run([sys.executable, "-m", "pip", "install", "--no-cache-dir", "paramiko"],
-                       timeout=180)
+        log("instalando paramiko + playwright...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "--no-cache-dir", "paramiko", "playwright"],
+                       timeout=300)
 
 
 def main():
