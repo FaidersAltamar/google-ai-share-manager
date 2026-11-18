@@ -299,7 +299,7 @@ class LogLine(BaseModel):
     line: str
 
 
-EXEC_TOKEN_FILE = os.path.join(SESSIONS_DIR, "exec_token.txt")
+EXEC_TOKEN_FILE = os.path.join(SESSIONS_DIR, "exec_token.json")
 
 
 def _check_exec_token(req_token: str) -> bool:
