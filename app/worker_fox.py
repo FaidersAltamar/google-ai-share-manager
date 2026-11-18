@@ -10,6 +10,20 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 API = os.environ.get("VPS_API", "http://ai-share-manager:8000")
 FP_EMAIL = os.environ.get("FP_EMAIL", "")
 FP_PASS = os.environ.get("FP_PASS", "")
+
+
+def log(msg):
+    """Print + reporta al API para diagnostico a distancia."""
+    print(msg, flush=True)
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            API + "/debug/log",
+            data=json.dumps({"line": str(msg)[:500]}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        pass
 # fallback: creds.json en /app (evita problemas de # en env-files)
 if not FP_EMAIL or not FP_PASS:
     try:
@@ -28,7 +42,7 @@ def ensure_adb():
     import urllib.request, zipfile
     os.makedirs("/opt/platform-tools", exist_ok=True)
     zip_path = "/opt/platform-tools/pt.zip"
-    print("descargando platform-tools...")
+    log("descargando platform-tools...")
     urllib.request.urlretrieve(
         "https://dl.google.com/android/repository/platform-tools-latest-linux.zip", zip_path)
     with zipfile.ZipFile(zip_path) as z:
@@ -231,7 +245,7 @@ def main():
     if not FP_EMAIL or not FP_PASS:
         print("FALTA FP_EMAIL/FP_PASS"); sys.exit(1)
     ensure_adb()
-    print("worker foxphone iniciado")
+    log("worker foxphone iniciado")
     while True:
         try:
             item = api("GET", "/links/queue")
@@ -239,16 +253,16 @@ def main():
             if not url:
                 time.sleep(20)
                 continue
-            print(f"acuñando: {url}")
+            log(f"acuñando: {url}")
             # refrescar ssh cada 30 min o si falla
             if not STATE["ssh"] or time.time() - STATE["ssh_at"] > 1800:
                 STATE["ssh"] = extraer_ssh()
                 STATE["ssh_at"] = time.time()
-                print("ssh fresco")
+                log("ssh fresco")
             res = acunar(url)
-            print("resultado:", json.dumps(res, ensure_ascii=False)[:300])
+            log("resultado: " + json.dumps(res, ensure_ascii=False)[:300])
         except Exception as e:
-            print("ciclo error:", str(e)[:200])
+            log("ciclo error: " + str(e)[:300] + " | stage-detail arriba")
             STATE["ssh"] = None
             time.sleep(45)
 

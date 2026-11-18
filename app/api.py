@@ -292,6 +292,32 @@ class QueueItem(BaseModel):
     url: str
 
 
+WORKERLOG = os.path.join(SESSIONS_DIR, "workerlog.txt")
+
+
+class LogLine(BaseModel):
+    line: str
+
+
+@app.post("/debug/log")
+def debug_log(payload: LogLine):
+    """El worker postea sus prints aqui (diagnostico a distancia)."""
+    ts = time.strftime("%H:%M:%S")
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
+    with open(WORKERLOG, "a", encoding="utf-8") as f:
+        f.write(f"[{ts}] {payload.line}\n")
+    return {"ok": True}
+
+
+@app.get("/debug/workerlog")
+def workerlog(last: int = 80):
+    try:
+        lines = open(WORKERLOG, encoding="utf-8").read().splitlines()
+        return JSONResponse({"lines": lines[-last:]})
+    except Exception:
+        return JSONResponse({"lines": []})
+
+
 @app.post("/links/queue")
 def queue_add(item: QueueItem):
     q = _load_json(QUEUE_FILE, [])
