@@ -5,6 +5,7 @@ Loop: GET /links/queue -> extrae SSH del console (Playwright, cada ciclo o si ex
       -> POST /links/bare
 """
 import sys, os, time, re, json, socket, threading, select, subprocess
+socket.setdefaulttimeout(120)
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 API = os.environ.get("VPS_API", "http://ai-share-manager:8000")
@@ -280,9 +281,9 @@ def main():
     # validar credenciales foxphone
     if not FP_EMAIL or not FP_PASS:
         print("FALTA FP_EMAIL/FP_PASS"); sys.exit(1)
+    log("worker foxphone iniciado")
     ensure_adb()
     ensure_deps()
-    log("worker foxphone iniciado")
     while True:
         try:
             item = api("GET", "/links/queue")

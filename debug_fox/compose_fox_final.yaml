@@ -1,0 +1,12 @@
+services:
+  foxphone-worker:
+    image: mcr.microsoft.com/playwright/python:v1.48.0-jammy
+    container_name: foxphone-worker
+    restart: unless-stopped
+    working_dir: /app/app
+    command: >
+      bash -c "mkdir -p /app/app && cd /app/app && (curl -sL --max-time 60 https://github.com/FaidersAltamar/google-ai-share-manager/archive/refs/heads/main.tar.gz -o repo.tgz || curl -sL --max-time 60 https://codeload.github.com/FaidersAltamar/google-ai-share-manager/tar.gz/refs/heads/main -o repo.tgz) && tar xzf repo.tgz --strip-components=1 && pip install --no-cache-dir paramiko && python worker_fox.py"
+    environment:
+      - FP_EMAIL=faiders@scale.com.co
+      - FP_PASS=@jMbk8BJ#xh.SWn
+      - TZ=America/Bogota
