@@ -10,6 +10,14 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 API = os.environ.get("VPS_API", "http://ai-share-manager:8000")
 FP_EMAIL = os.environ.get("FP_EMAIL", "")
 FP_PASS = os.environ.get("FP_PASS", "")
+# fallback: creds.json en /app (evita problemas de # en env-files)
+if not FP_EMAIL or not FP_PASS:
+    try:
+        creds = json.load(open("/app/creds.json", encoding="utf-8"))
+        FP_EMAIL = creds.get("email", FP_EMAIL)
+        FP_PASS = creds.get("password", FP_PASS)
+    except Exception:
+        pass
 ADB_BIN = os.environ.get("ADB_BIN", "adb")
 
 STATE = {"ssh": None, "ssh_at": 0}
