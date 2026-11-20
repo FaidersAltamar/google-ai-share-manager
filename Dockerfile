@@ -6,7 +6,17 @@ WORKDIR /app
 # Dependencias del sistema
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
+    wget \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Android platform-tools (adb)
+RUN mkdir -p /opt/platform-tools && \
+    cd /opt/platform-tools && \
+    wget -q https://dl.google.com/android/repository/platform-tools-latest-linux.zip && \
+    unzip -q platform-tools-latest-linux.zip && \
+    rm platform-tools-latest-linux.zip && \
+    chmod +x platform-tools/adb
 
 # Dependencias Python
 COPY requirements.txt .
