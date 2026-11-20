@@ -1,7 +1,7 @@
 ADB Info
 Step 1
 Command:
-ssh -oHostKeyAlgorithms=+ssh-rsa 7709363018911996714_1794991421@adb.foxphone.com -p 1824 -L 9536:foxphone:100 -Nf
+ssh -oHostKeyAlgorithms=+ssh-rsa 7709363018911996714_1795157841@adb.foxphone.com -p 1824 -L 9536:foxphone:100 -Nf
 Password:
 VXhpkxjt+jTcWtdq+wv6W8R37FwFZ88ItrH7YR4FsXq+YDt6o0WoBSl0mbxQ48vR1VXQjJK9c9DtnVJPGCwaYA==
 Step 2
@@ -17,15 +17,7 @@ macOS:
 for pid in $(lsof -i :1824 -t); do kill -9 $pid; done
 Linux:
 for pid in $(netstat -tulnp | grep ':1824' | awk '{print $7}' | cut -d '/' -f1); do kill -9 $pid; done
-
-=== DIALOG ===
 Confirm Refund RequestiRefunds only apply to unused charges after 23:59:59 today. Refunds will be credited to your wallet balance.Refund InfoCancelConfirm Refund
-
-=== DIALOG ===
 Edit RemarkRemarkCancelSaveCancelConfirm
-
-=== DIALOG ===
 Create GroupGroup NameSortCancelSaveCancelConfirm
-
-=== DIALOG ===
 TipsAre you sure you want to delete this group ()?CancelConfirmCancelConfirm

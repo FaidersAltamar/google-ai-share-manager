@@ -1,354 +1,315 @@
-"""Worker FoxPhone: acuña tokens bare en el Galaxy S21 cloud y los registra en el API.
+import sys, os, time, re, json
+import urllib.request
+import paramiko
+import socket
+import threading
+import select
+import subprocess
 
-Loop: GET /links/queue -> extrae SSH del console (Playwright, cada ciclo o si expira)
-      -> tunnel paramiko -> adb flujo (buscar URL -> abrir -> compartir -> copiar -> pegar -> extraer)
-      -> POST /links/bare
-"""
-import sys, os, time, re, json, socket, threading, select, subprocess
-socket.setdefaulttimeout(120)
-sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-
+# Global constants and utilities
 API = os.environ.get("VPS_API", "http://ai-share-manager:8000")
-
-def detect_api():
-    """Prueba candidatos hasta encontrar uno vivo.
-
-    El API se publica en 0.0.0.0:8000 del host, asi que es alcanzable desde
-    cualquier red del host: docker0 (172.16.0.1), gateway de la red docker del
-    proyecto del API (172.16.3.1) o la IP publica. OJO: este host usa 172.16.0.0/16
-    (no 172.17.0.0/16) y la imagen no trae `ip`, por eso se listan los candidatos
-    de forma explicita en vez de adivinarlos con `ip route`.
-    """
-    candidates = []
-    env = os.environ.get("VPS_API", "")
-    if env:
-        candidates.append(env)
-    try:
-        gw = subprocess.check_output(
-            "ip route | awk '/default/ {print $3}'", shell=True).decode().strip()
-        if gw:
-            candidates.append(f"http://{gw}:8000")
-    except Exception:
-        pass
-    candidates += [
-        "http://172.16.0.1:8000",      # docker0 del host
-        "http://172.16.3.1:8000",      # gateway de la red del proyecto del API
-        "http://179.66.140.79:8000",   # IP publica del VPS
-    ]
-    for c in candidates:
-        try:
-            raw = subprocess.check_output(
-                ["curl", "-s", "--max-time", "5", c + "/health"], timeout=15)
-            if b"status" in raw:
-                print("API detectada:", c)
-                return c
-        except Exception:
-            continue
-    raise RuntimeError("api_no_alcanzable: " + ",".join(candidates))
-
-API = detect_api()
-FP_EMAIL = os.environ.get("FP_EMAIL", "")
-FP_PASS = os.environ.get("FP_PASS", "")
+GAPP = "com.google.android.googlequicksearchbox"
+ADB_BIN = os.environ.get("ADB_BIN", "/opt/platform-tools/platform-tools/adb")
+DEBUG_LOG_API = API + "/debug/log"
 
 
 def log(msg):
-    """Print + reporta al API para diagnostico a distancia."""
-    print(msg, flush=True)
+    sys.stdout.write(f"FoxWorkerLOG: {msg}\n")
+    sys.stdout.flush()
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            API + "/debug/log",
+        urllib.request.urlopen(urllib.request.Request(
+            DEBUG_LOG_API,
             data=json.dumps({"line": str(msg)[:500]}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST")
-        urllib.request.urlopen(req, timeout=10)
+            headers={"Content-Type": "application/json"}
+        ), timeout=5)
     except Exception:
         pass
-# fallback: creds.json en /app (evita problemas de # en env-files)
-if not FP_EMAIL or not FP_PASS:
-    try:
-        creds = json.load(open("/app/creds.json", encoding="utf-8"))
-        FP_EMAIL = creds.get("email", FP_EMAIL)
-        FP_PASS = creds.get("password", FP_PASS)
-    except Exception:
-        pass
-ADB_BIN = os.environ.get("ADB_BIN", "/opt/platform-tools/platform-tools/adb")
 
 
-def ensure_adb():
-    """Descarga platform-tools si el binario no existe (Linux)."""
-    if os.path.exists(ADB_BIN):
-        return
-    import urllib.request, zipfile
-    os.makedirs("/opt/platform-tools", exist_ok=True)
-    zip_path = "/opt/platform-tools/pt.zip"
-    log("descargando platform-tools...")
-    urllib.request.urlretrieve(
-        "https://dl.google.com/android/repository/platform-tools-latest-linux.zip", zip_path)
-    with zipfile.ZipFile(zip_path) as z:
-        z.extractall("/opt/platform-tools")
-    os.chmod(ADB_BIN, 0o755)
-    print("platform-tools listos:", os.path.exists(ADB_BIN))
+class FoxWorker:
+    def __init__(self):
+        self.ssh_transport = None
+        self.local_port = int(os.environ.get("DIAG_PORT", "19536"))
+        self._ssh_config = None
 
-STATE = {"ssh": None, "ssh_at": 0}
+    def _get_ssh_config(self):
+        if self._ssh_config is None:
+            with urllib.request.urlopen(API + "/adb-creds", timeout=15) as r:
+                self._ssh_config = json.loads(r.read().decode())
+        return self._ssh_config
 
-
-def api(method, path, body=None, timeout=30):
-    import urllib.request
-    req = urllib.request.Request(API + path, method=method)
-    req.add_header("Content-Type", "application/json")
-    data = json.dumps(body).encode() if body else None
-    with urllib.request.urlopen(req, data, timeout=timeout) as r:
-        return json.loads(r.read().decode())
-
-
-def extraer_ssh():
-    """Consulta las creds SSH al API (subidas desde el PC del operador donde no hay captcha)."""
-    try:
-        creds = api("GET", "/adb-creds")
-        need = {"user", "host", "port", "lport", "rhost", "rport", "pass"}
-        if need.issubset(creds.keys()):
-            print("ssh creds desde API")
-            return creds
-    except Exception:
-        pass
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36",
-            viewport={"width": 1440, "height": 900}, locale="en-US")
-        page = ctx.new_page()
-        page.goto("https://console.foxphone.com/", timeout=60000)
-        page.wait_for_timeout(7000)
-        email_f = page.locator("input[placeholder='Please enter your email']").first
+    def SSHConnect(self, timeout=120):
+        cfg = self._get_ssh_config()
         try:
-            email_f.wait_for(state="visible", timeout=5000)
-            email_f.fill(FP_EMAIL)
-            page.locator("input[placeholder='Please enter your Password']").first.fill(FP_PASS)
-            for sel in ("button:has-text('Log In')", "button:has-text('Login')"):
-                b = page.locator(sel)
-                if b.count() > 0:
-                    b.first.click(); break
-            page.wait_for_timeout(9000)
-        except Exception:
-            pass
+            self.ssh_transport = paramiko.Transport((cfg["host"], cfg["port"]))
+            self.ssh_transport.connect(username=cfg["user"], password=cfg["pass"])
+            
+            srv = socket.socket()
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("127.0.0.1", self.local_port))
+            srv.listen(10)
+            
+            def handler():
+                for cs, _ in iter(srv.accept, None):
+                    try:
+                        ch = self.ssh_transport.open_channel(
+                            "direct-tcpip", (cfg["rhost"], cfg["rport"]), cs.getpeername()
+                        )
+                    except Exception:
+                        cs.close()
+                        continue
+                    try:
+                        while True:
+                            r, _, _ = select.select([cs, ch], [], [], 60)
+                            if cs in r:
+                                d = cs.recv(4096)
+                                if not d: break
+                                ch.sendall(d)
+                            if ch in r:
+                                d = ch.recv(4096)
+                                if not d: break
+                                cs.sendall(d)
+                    except Exception:
+                        pass
+                    cs.close()
+            
+            threading.Thread(target=handler, daemon=True).start()
+            time.sleep(1)
+            
+            return self._wait_device(10)
+        except Exception as e:
+            log(f"SSHConnect failed: {e}")
+            return False
+
+    def _wait_device(self, tries=10):
+        for _ in range(tries):
+            out = self.adb("devices")
+            if "127.0.0.1" in out and "\tdevice" in out:
+                return True
+            self.adb("disconnect", f"127.0.0.1:{self.local_port}")
+            self.adb("connect", f"127.0.0.1:{self.local_port}")
+            time.sleep(3)
+        return False
+
+    def adb(self, *args, timeout=20):
         try:
-            page.wait_for_selector("text=Galaxy S21", timeout=40000)
-        except Exception:
-            pass
-        row = page.locator("tr", has_text="Galaxy S21").first
-        row.locator("button").last.click()
-        page.wait_for_timeout(2500)
-        matches = page.get_by_text("ADB Info")
-        clicked = False
-        for i in range(matches.count()):
-            el = matches.nth(i)
-            try:
-                if el.is_visible():
-                    el.click(); clicked = True; break
-            except Exception:
+            r = subprocess.run([ADB_BIN, "-s", f"127.0.0.1:{self.local_port}", *args],
+                             capture_output=True, timeout=timeout)
+            return (r.stdout + r.stderr).decode("utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
+            return "<TIMEOUT>"
+
+    def wipe_app_state(self):
+        self.adb("shell", "am", "force-stop", GAPP)
+        time.sleep(1)
+        self.adb("shell", "pm", "clear", GAPP)
+        time.sleep(2)
+
+    def launch_google(self):
+        self.adb("shell", "input", "keyevent", "3")
+        time.sleep(1)
+        self.adb("shell", "monkey", "-p", GAPP, "-c", "android.intent.category.LAUNCHER", "1", timeout=30)
+        time.sleep(5)
+
+    def type_text(self, text):
+        # Tap the search box first
+        xml = self.dump_ui()
+        nodes = self.parse_nodes(xml)
+        box = None
+        for n in nodes:
+            if "googleapp_facade_search_box" in n["rid"] or "search_box" in n["rid"] or n["text"] == "Buscar":
+                box = n
+                break
+        if box:
+            self.tap(box["x"], box["y"])
+            time.sleep(1)
+        
+        escaped = text.replace(" ", "%s")
+        self.adb("shell", "input", "text", escaped, timeout=30)
+        time.sleep(2)
+
+    def press_enter(self):
+        self.adb("shell", "input", "keyevent", "66")
+        time.sleep(3)
+
+    def tap(self, x, y):
+        self.adb("shell", "input", "tap", str(x), str(y))
+        time.sleep(1)
+
+    def dump_ui(self):
+        self.adb("shell", "uiautomator", "dump", "/sdcard/ui.xml", timeout=30)
+        xml = self.adb("shell", "cat", "/sdcard/ui.xml", timeout=15)
+        return xml
+
+    def parse_nodes(self, xml):
+        nodes = []
+        for m in re.finditer(r'<node[^>]*?>', xml):
+            node = m.group(0)
+            bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', node)
+            if not bm:
                 continue
-        if not clicked:
-            raise RuntimeError("no_adb_info_visible")
-        page.wait_for_timeout(5000)
-        dialogs = page.locator(".t-dialog, [role=dialog], .t-popup__content")
-        full = ""
-        for i in range(min(dialogs.count(), 5)):
-            try:
-                t = dialogs.nth(i).inner_text()
-                if t.strip():
-                    full += t + "\n"
-            except Exception:
-                pass
-        browser.close()
-    m = re.search(r"ssh -o\S+\s+(\S+)@(\S+)\s+-p\s+(\d+)\s+-L\s+(\d+):([^:\s]+):(\d+)", full)
-    pw = re.search(r"Password:\s*\n\s*(\S+)", full)
-    if not m or not pw:
-        raise RuntimeError(f"no_ssh_en_modal: {full[:200]}")
-    return {
-        "user": m.group(1), "host": m.group(2), "port": int(m.group(3)),
-        "lport": int(m.group(4)), "rhost": m.group(5), "rport": int(m.group(6)),
-        "pass": pw.group(1),
-    }
+            g = lambda p: (re.search(p, node).group(1) if re.search(p, node) else "")
+            x1, y1, x2, y2 = map(int, bm.groups())
+            nodes.append({
+                "text": g(r'text="([^"]*)"'),
+                "desc": g(r'content-desc="([^"]*)"'),
+                "rid": g(r'resource-id="([^"]*)"'),
+                "pkg": g(r'package="([^"]*)"'),
+                "x": (x1 + x2) // 2,
+                "y": (y1 + y2) // 2
+            })
+        return nodes
+
+    def find_and_tap_suggestion(self, url):
+        domain = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
+        xml = self.dump_ui()
+        nodes = self.parse_nodes(xml)
+        for n in nodes:
+            if n["text"] and domain in n["text"].lower() and "search_box" not in n["rid"]:
+                self.tap(n["x"], n["y"])
+                time.sleep(5)
+                return True
+        return False
+
+    def find_and_tap_organic_result(self, url):
+        domain = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
+        xml = self.dump_ui()
+        nodes = self.parse_nodes(xml)
+        for n in nodes:
+            if n["pkg"] == GAPP and n["text"] and domain.lower() in n["text"].lower():
+                if "search_box" not in n["rid"] and "srp_search_box" not in n["rid"]:
+                    self.tap(n["x"], n["y"])
+                    time.sleep(5)
+                    return True
+        return False
+
+    def type_url_direct(self, url):
+        clean = url.replace("https://", "").replace("http://", "")
+        clean = re.sub(r"[^A-Za-z0-9._\-/]", "%s", clean)
+        self.type_text(clean)
+        self.press_enter()
+        time.sleep(8)
+
+    def extract_token(self):
+        xml = self.dump_ui()
+        for n in self.parse_nodes(xml):
+            if "Compartir" in (n["text"] or "") or "Compartir" in (n["desc"] or ""):
+                self.tap(n["x"], n["y"])
+                time.sleep(5)
+                xml2 = self.dump_ui()
+                toks = re.findall(r"https://share\.google/[A-Za-z0-9_\-]+", xml2)
+                if toks:
+                    return toks[-1]
+        return None
+
+    def quit(self):
+        if self.ssh_transport:
+            self.ssh_transport.close()
 
 
-def tunnel(ssh):
-    import paramiko
-    transport = paramiko.Transport((ssh["host"], ssh["port"]))
-    transport.connect(username=ssh["user"], password=ssh["pass"])
-    server = socket.socket(); server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("127.0.0.1", ssh["lport"])); server.listen(10)
-    def handle(cs):
-        try:
-            chan = transport.open_channel("direct-tcpip", (ssh["rhost"], ssh["rport"]), cs.getpeername())
-        except Exception:
-            cs.close(); return
-        try:
-            while True:
-                r, _, _ = select.select([cs, chan], [], [], 60)
-                if cs in r:
-                    d = cs.recv(4096)
-                    if not d: break
-                    chan.sendall(d)
-                if chan in r:
-                    d = chan.recv(4096)
-                    if not d: break
-                    cs.sendall(d)
-        except Exception:
-            pass
-        cs.close()
-    threading.Thread(target=lambda: [handle(cs) for cs, _ in iter(server.accept, None)], daemon=True).start()
-    time.sleep(1)
-    return transport
+def _try_s2_autocomplete(worker, url):
+    log(f"[S2] Trying autocomplete for {url}")
+    worker.wipe_app_state()
+    worker.launch_google()
+    
+    domain = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
+    worker.type_text(domain[:15])
+    time.sleep(2)
+    
+    # Look for exact URL match in suggestions
+    xml = worker.dump_ui()
+    nodes = worker.parse_nodes(xml)
+    for n in nodes:
+        if n["text"] and url.replace("https://", "").replace("http://", "") in n["text"]:
+            worker.tap(n["x"], n["y"])
+            time.sleep(8)
+            return worker.extract_token()
+    
+    # If no exact match, press ENTER on first suggestion
+    worker.press_enter()
+    time.sleep(8)
+    return worker.extract_token()
 
 
-def adb(*args, timeout=60):
-    serial = f"127.0.0.1:{STATE['ssh']['lport']}"
-    r = subprocess.run([ADB_BIN, "-s", serial, *args], capture_output=True, timeout=timeout)
-    return (r.stdout + r.stderr).decode("utf-8", errors="ignore")
-
-
-def dump_xml(tag=""):
-    adb("shell", "uiautomator", "dump", "/sdcard/ui.xml", timeout=50)
-    return adb("shell", "cat", "/sdcard/ui.xml", timeout=30)
-
-
-def tap_coords(x, y):
-    adb("shell", "input", "tap", str(x), str(y))
-
-
-def tap_text(xml, patterns):
-    for pat in patterns:
-        for mm in re.finditer(
-            rf'(?:text|content-desc)="([^"]*{pat}[^"]*)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-            xml, re.I):
-            x1, y1, x2, y2 = map(int, mm.groups()[1:])
-            adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
-            return mm.group(1)[:50]
+def _try_s3_organic(worker, url):
+    log(f"[S3] Trying organic search for {url}")
+    worker.wipe_app_state()
+    worker.launch_google()
+    
+    domain = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
+    worker.type_text(domain)
+    worker.press_enter()
+    time.sleep(8)
+    
+    # Look for result containing our domain
+    xml = worker.dump_ui()
+    nodes = worker.parse_nodes(xml)
+    for n in nodes:
+        if n["pkg"] == "com.android.chrome" and n["text"] and domain.lower() in n["text"].lower():
+            worker.tap(n["x"], n["y"])
+            time.sleep(8)
+            return worker.extract_token()
+    
+    # Fallback: tap first result
+    for n in nodes:
+        if n["pkg"] == "com.android.chrome" and n["text"]:
+            worker.tap(n["x"], n["y"])
+            time.sleep(8)
+            return worker.extract_token()
+    
     return None
 
 
-def acunar(url: str) -> dict:
-    """Flujo completo por ADB para una URL arbitraria."""
-    domain = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
-    ssh = STATE["ssh"]
-    transport = tunnel(ssh)
-    try:
-        subprocess.run([ADB_BIN, "kill-server"], capture_output=True); time.sleep(2)
-        adb("connect", f"127.0.0.1:{ssh['lport']}"); time.sleep(2)
-
-        # 1. buscar el dominio en la app google
-        adb("shell", "am", "start", "-a", "android.search.ACTION_WEB_SEARCH",
-            "--es", "query", domain, timeout=30)
-        time.sleep(7)
-        xml = dump_xml(domain[:12])
-        # 2. abrir el resultado cuyo texto contenga el dominio
-        hit = tap_text(xml, [re.escape(domain)])
-        if not hit:
-            # fallback: tap el primer resultado de web
-            hit = tap_text(xml, [r"www\.", r"https?:"])
-        if not hit:
-            return {"ok": False, "error": "resultado_no_encontrado", "stage": "search"}
-        time.sleep(7)  # carga in-app
-
-        # 3. Compartir (coordenada fija barra in-app)
-        tap_coords(862, 103)
-        time.sleep(3)
-
-        # 4. Copiar (coordenada fija del sheet)
-        tap_coords(407, 1219)
-        time.sleep(2)
-
-        # 5. volver a la app google home y pegar para extraer
-        adb("shell", "input", "keyevent", "4"); time.sleep(2)
-        adb("shell", "input", "keyevent", "4"); time.sleep(2)
-        adb("shell", "monkey", "-p", "com.google.android.googlequicksearchbox",
-            "-c", "android.intent.category.LAUNCHER", "1", timeout=40)
-        time.sleep(3)
-        xml = dump_xml("home")
-        if not tap_text(xml, [r"B[u\u00fa]squeda por voz", r"Buscar"]):
-            return {"ok": False, "error": "campo_busqueda_no_encontrado", "stage": "paste"}
-        time.sleep(3)
-        adb("shell", "input", "keyevent", "279")  # KEYCODE_PASTE
-        time.sleep(2)
-        xml = dump_xml("pasted")
-        tokens = re.findall(r"https://share\.google/[A-Za-z0-9_\-]+", xml)
-        if not tokens:
-            return {"ok": False, "error": "paste_sin_token", "stage": "extract"}
-        token = tokens[-1]
-
-        # 6. registrar
-        res = api("POST", "/links/bare", {"code": token.split("/")[-1], "nota": f"worker fox: {url}"})
-        return {"ok": True, "token": token, "registro": res}
-    finally:
-        try:
-            transport.close()
-        except Exception:
-            pass
+def _try_s1_direct(worker, url):
+    log(f"[S1] Trying direct URL entry for {url}")
+    worker.wipe_app_state()
+    worker.launch_google()
+    
+    clean = url.replace("https://", "").replace("http://", "")
+    clean = re.sub(r"[^A-Za-z0-9._\-/]", "%s", clean)
+    worker.type_text(clean)
+    time.sleep(1)
+    worker.press_enter()
+    time.sleep(10)
+    
+    return worker.extract_token()
 
 
-def ensure_deps():
-    """paramiko es obligatorio (tunel SSH). playwright es opcional: solo se usa
-    como fallback para extraer SSH del console de FoxPhone; la via normal es
-    consultar /adb-creds (creds subidas desde la red residencial del operador).
-    playwright se fija en 1.48.0 para que coincida con los navegadores de la
-    imagen mcr.microsoft.com/playwright/python:v1.48.0-jammy."""
-    try:
-        import paramiko  # noqa
-    except ImportError:
-        log("instalando paramiko...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "--no-cache-dir", "paramiko"],
-                       timeout=600)
-    try:
-        import playwright  # noqa
-    except ImportError:
-        log("instalando playwright==1.48.0 (opcional)...")
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "playwright==1.48.0"],
-            timeout=600)
+def _try_strategies(url):
+    worker = FoxWorker()
+    if not worker.SSHConnect(120):
+        return {"ok": False, "error": "SSH connection failed"}
+    
+    strategies = [
+        (_try_s2_autocomplete, "S2-autocomplete"),
+        (_try_s3_organic, "S3-organic"),
+        (_try_s1_direct, "S1-direct"),
+    ]
+    
+    for fn, name in strategies:
+        log(f"Attempting {name}...")
+        token = fn(worker, url)
+        if token:
+            log(f"Success with {name}: {token}")
+            worker.quit()
+            return token
+    
+    worker.quit()
+    return None
 
 
-def reencolar(url, nota=""):
-    """Devuelve la URL a la cola para reintento (no perder trabajo)."""
-    try:
-        api("POST", "/links/queue", {"url": url})
-        log(f"reencolado para reintento: {url}")
-    except Exception as e:
-        log(f"no se pudo reencolar {url}: {str(e)[:120]}")
-
-
-def main():
-    # validar credenciales foxphone
-    if not FP_EMAIL or not FP_PASS:
-        print("FALTA FP_EMAIL/FP_PASS"); sys.exit(1)
-    log("worker foxphone iniciado")
-    ensure_adb()
-    ensure_deps()
-    while True:
-        url = None
-        try:
-            item = api("GET", "/links/queue", timeout=20)
-            url = (item or {}).get("url")
-            if not url:
-                time.sleep(20)
-                continue
-            log(f"acuñando: {url}")
-            # refrescar ssh cada 30 min o si falla
-            if not STATE["ssh"] or time.time() - STATE["ssh_at"] > 1800:
-                STATE["ssh"] = extraer_ssh()
-                STATE["ssh_at"] = time.time()
-                log("ssh fresco")
-            res = acunar(url)
-            log("resultado: " + json.dumps(res, ensure_ascii=False)[:300])
-            if not res.get("ok"):
-                reencolar(url)
-        except Exception as e:
-            log("ciclo error: " + str(e)[:300] + " | stage-detail arriba")
-            STATE["ssh"] = None
-            if url:
-                reencolar(url)
-            time.sleep(45)
+def acunar(url):
+    return _try_strategies(url)
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 2:
+        print("Usage: python app/worker_fox.py <URL>")
+        sys.exit(1)
+    url = sys.argv[1]
+    print(f"Minting token for: {url}")
+    token = acunar(url)
+    if token:
+        print(f"SUCCESS: {token}")
+    else:
+        print("FAILED: No token obtained")
