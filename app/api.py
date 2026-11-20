@@ -306,7 +306,7 @@ def debug_source(name: str):
     safe = os.path.basename(name)
     if safe not in allowed:
         raise HTTPException(status_code=404, detail={"error": "archivo_no_permitido"})
-    path = os.path.join("/app/app", safe)
+    path = os.path.join("/app", safe)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail={"error": "no_existe"})
     from fastapi.responses import PlainTextResponse
