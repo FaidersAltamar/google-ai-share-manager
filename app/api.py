@@ -253,6 +253,40 @@ def exec_sh(payload: ExecRequest):
     }
 
 
+PANEL_HTML = """<!doctype html><html lang=es><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
+<title>AKR Bare System</title>
+<style>
+body{font-family:system-ui;background:#0f172a;color:#e2e8f0;margin:0;padding:16px;max-width:640px;margin-inline:auto}
+h1{font-size:1.2rem} h2{font-size:1rem;margin-top:24px}
+textarea,input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font-size:1rem;margin:6px 0}
+button{background:#2563eb;color:#fff;border:0;padding:12px 18px;border-radius:8px;font-size:1rem;width:100%;margin:6px 0}
+.out{background:#1e293b;border-radius:8px;padding:10px;margin-top:8px;word-break:break-all;white-space:pre-wrap;display:none}
+.ok{color:#4ade80}.err{color:#f87171}
+small{color:#94a3b8}
+</style>
+<h1>AKR Bare System</h1>
+<h2>1. Registrar token bare acu&ntilde;ado</h2>
+<small>Pega el enlace share.google/... o el codigo que acuno el telefono.</small>
+<textarea id=code rows=2 placeholder="https://share.google/TOKEN"></textarea>
+<input id=nota placeholder="Nota (opcional)">
+<button onclick="reg(this)">Registrar y validar</button>
+<div id=out1 class=out></div>
+<h2>2. Estado</h2>
+<button onclick="estado()">Ver sistema</button>
+<div id=out2 class=out></div>
+<h2>3. Catalogo</h2>
+<button onclick="listar()">Ver enlaces</button>
+<div id=out3 class=out></div>
+<script>
+async function reg(b){b.disabled=1;const o=document.getElementById('out1');o.style.display='block';o.className='out';o.textContent='Validando cadena...';
+try{const r=await fetch('/links/bare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.getElementById('code').value,nota:document.getElementById('nota').value})});
+const j=await r.json();if(j.ok){const st=j.verificado||{};o.innerHTML='<span class=ok>&#9989; Registrado:</span><br><a href="https://www.google.com/share.google?q='+j.code+'" target=_blank>https://www.google.com/share.google?q='+j.code+'</a><br><br>Estado: '+JSON.stringify(st).slice(0,200)}else{o.innerHTML='<span class=err>&#10060; '+JSON.stringify(j).slice(0,300)+'</span>'}}catch(e){o.innerHTML='<span class=err>&#10060; '+e+'</span>'}b.disabled=0}
+async function estado(){const o=document.getElementById('out2');o.style.display='block';try{const r=await fetch('/adb-creds');const j=await r.json();o.textContent='SSH creds: '+JSON.stringify(j).slice(0,250)}catch(e){o.textContent=e}}
+async function listar(){const o=document.getElementById('out3');o.style.display='block';try{const r=await fetch('/links/list');const j=await r.json();o.textContent=JSON.stringify(j,null,1).slice(0,1500)}catch(e){o.textContent=e}}
+listar();
+</script>"""
+
+
 @app.get("/debug/source/{name}")
 def debug_source(name: str):
     """Sirve archivos de codigo del sistema para el bootstrap de otros workers."""
