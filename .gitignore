@@ -5,3 +5,5 @@ __pycache__/
 .env
 .geny_token
 .foxphone_key
+.cf_token
+.cf_token2

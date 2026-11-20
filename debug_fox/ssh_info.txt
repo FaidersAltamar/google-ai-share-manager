@@ -1,7 +1,7 @@
 ADB Info
 Step 1
 Command:
-ssh -oHostKeyAlgorithms=+ssh-rsa 7709363018911996714_1794979576@adb.foxphone.com -p 1824 -L 9536:foxphone:100 -Nf
+ssh -oHostKeyAlgorithms=+ssh-rsa 7709363018911996714_1794991421@adb.foxphone.com -p 1824 -L 9536:foxphone:100 -Nf
 Password:
 VXhpkxjt+jTcWtdq+wv6W8R37FwFZ88ItrH7YR4FsXq+YDt6o0WoBSl0mbxQ48vR1VXQjJK9c9DtnVJPGCwaYA==
 Step 2
