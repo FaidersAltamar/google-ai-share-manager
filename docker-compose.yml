@@ -28,7 +28,7 @@ services:
       - VPS_API=http://ai-share-manager:8000
       - ADB_BIN=/opt/platform-tools/platform-tools/adb
       - DIAG_PORT=19536
-    command: python -u -m app.worker_fox
+    command: python -u /app/worker_fox.py
 
 networks:
   ai-share-net:
