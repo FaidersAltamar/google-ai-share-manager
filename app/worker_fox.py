@@ -282,7 +282,7 @@ def acunar(url: str) -> dict:
         return {"ok": True, "token": token, "registro": res}
     finally:
         try:
-            transport.stop()
+            transport.close()
         except Exception:
             pass
 
