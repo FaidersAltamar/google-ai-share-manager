@@ -11,8 +11,14 @@ sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 API = os.environ.get("VPS_API", "http://ai-share-manager:8000")
 
 def detect_api():
-    """Prueba candidatos: gateway de la red, docker0 del host (172.17.0.1).
-    El API esta publicado en 0.0.0.0:8000 del host -> reachable desde cualquier red."""
+    """Prueba candidatos hasta encontrar uno vivo.
+
+    El API se publica en 0.0.0.0:8000 del host, asi que es alcanzable desde
+    cualquier red del host: docker0 (172.16.0.1), gateway de la red docker del
+    proyecto del API (172.16.3.1) o la IP publica. OJO: este host usa 172.16.0.0/16
+    (no 172.17.0.0/16) y la imagen no trae `ip`, por eso se listan los candidatos
+    de forma explicita en vez de adivinarlos con `ip route`.
+    """
     candidates = []
     env = os.environ.get("VPS_API", "")
     if env:
@@ -24,16 +30,21 @@ def detect_api():
             candidates.append(f"http://{gw}:8000")
     except Exception:
         pass
-    candidates.append("http://172.17.0.1:8000")
+    candidates += [
+        "http://172.16.0.1:8000",      # docker0 del host
+        "http://172.16.3.1:8000",      # gateway de la red del proyecto del API
+        "http://179.66.140.79:8000",   # IP publica del VPS
+    ]
     for c in candidates:
         try:
             raw = subprocess.check_output(
                 ["curl", "-s", "--max-time", "5", c + "/health"], timeout=15)
             if b"status" in raw:
+                print("API detectada:", c)
                 return c
         except Exception:
             continue
-    return candidates[0] if candidates else "http://172.17.0.1:8000"
+    raise RuntimeError("api_no_alcanzable: " + ",".join(candidates))
 
 API = detect_api()
 FP_EMAIL = os.environ.get("FP_EMAIL", "")
@@ -277,14 +288,33 @@ def acunar(url: str) -> dict:
 
 
 def ensure_deps():
+    """paramiko es obligatorio (tunel SSH). playwright es opcional: solo se usa
+    como fallback para extraer SSH del console de FoxPhone; la via normal es
+    consultar /adb-creds (creds subidas desde la red residencial del operador).
+    playwright se fija en 1.48.0 para que coincida con los navegadores de la
+    imagen mcr.microsoft.com/playwright/python:v1.48.0-jammy."""
     try:
         import paramiko  # noqa
-        import playwright  # noqa
-        return
     except ImportError:
-        log("instalando paramiko + playwright...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "--no-cache-dir", "paramiko", "playwright"],
-                       timeout=300)
+        log("instalando paramiko...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "--no-cache-dir", "paramiko"],
+                       timeout=600)
+    try:
+        import playwright  # noqa
+    except ImportError:
+        log("instalando playwright==1.48.0 (opcional)...")
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-cache-dir", "playwright==1.48.0"],
+            timeout=600)
+
+
+def reencolar(url, nota=""):
+    """Devuelve la URL a la cola para reintento (no perder trabajo)."""
+    try:
+        api("POST", "/links/queue", {"url": url})
+        log(f"reencolado para reintento: {url}")
+    except Exception as e:
+        log(f"no se pudo reencolar {url}: {str(e)[:120]}")
 
 
 def main():
@@ -295,8 +325,9 @@ def main():
     ensure_adb()
     ensure_deps()
     while True:
+        url = None
         try:
-            item = api("GET", "/links/queue")
+            item = api("GET", "/links/queue", timeout=20)
             url = (item or {}).get("url")
             if not url:
                 time.sleep(20)
@@ -309,9 +340,13 @@ def main():
                 log("ssh fresco")
             res = acunar(url)
             log("resultado: " + json.dumps(res, ensure_ascii=False)[:300])
+            if not res.get("ok"):
+                reencolar(url)
         except Exception as e:
             log("ciclo error: " + str(e)[:300] + " | stage-detail arriba")
             STATE["ssh"] = None
+            if url:
+                reencolar(url)
             time.sleep(45)
 
 

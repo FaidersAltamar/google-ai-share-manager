@@ -32,7 +32,9 @@ SESSIONS_DIR = "/app/sessions"
 LINKS_FILE = os.path.join(SESSIONS_DIR, "links_bare.json")
 QUEUE_FILE = os.path.join(SESSIONS_DIR, "queue.json")
 WORKERLOG = os.path.join(SESSIONS_DIR, "workerlog.txt")
-SSH_CREDS_FILE = os.path.join("/app", "ssh_creds.json")
+# las creds SSH viven en el volumen persistente (/app/sessions) para no perderlas
+# en cada recreate del contenedor
+SSH_CREDS_FILE = os.path.join(SESSIONS_DIR, "ssh_creds.json")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36"
 
 app = FastAPI(title="AKR Bare System API", version="2.2")
@@ -180,7 +182,7 @@ def adb_creds_upload(creds: AdbCreds):
     data = {"user": creds.user, "host": creds.host, "port": creds.port,
             "lport": creds.lport, "rhost": creds.rhost, "rport": creds.rport,
             "pass": creds.pass_}
-    os.makedirs("/app", exist_ok=True)
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
     with open(SSH_CREDS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f)
     return {"ok": True, "file": SSH_CREDS_FILE, "cred": {k: (v[:12] + "..." if k == "pass" else v) for k, v in data.items()}}
