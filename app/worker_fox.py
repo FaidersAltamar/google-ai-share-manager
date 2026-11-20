@@ -302,14 +302,55 @@ def acunar(url):
     return _try_strategies(url)
 
 
+def worker_loop():
+    """Continuous worker loop: polls queue, processes URLs, reports results."""
+    log("Worker loop started")
+    while True:
+        try:
+            # Poll queue
+            req = urllib.request.Request(API + "/links/queue")
+            with urllib.request.urlopen(req, timeout=15) as r:
+                item = json.loads(r.read().decode())
+            
+            url = item.get("url")
+            if not url:
+                log("Queue empty, sleeping 10s")
+                time.sleep(10)
+                continue
+            
+            log(f"Processing: {url}")
+            token = acunar(url)
+            
+            if token:
+                log(f"Token obtained: {token}")
+                # Register the token
+                reg = urllib.request.Request(
+                    API + "/links/bare",
+                    data=json.dumps({"code": token, "nota": f"auto:{url}"}).encode(),
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(reg, timeout=15) as r:
+                    res = json.loads(r.read().decode())
+                log(f"Registered: {res}")
+            else:
+                log(f"Failed to obtain token for {url}")
+                
+        except Exception as e:
+            log(f"Worker loop error: {e}")
+            time.sleep(30)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python app/worker_fox.py <URL>")
-        sys.exit(1)
-    url = sys.argv[1]
-    print(f"Minting token for: {url}")
-    token = acunar(url)
-    if token:
-        print(f"SUCCESS: {token}")
+    if len(sys.argv) == 2:
+        # Single-shot mode for testing
+        url = sys.argv[1]
+        print(f"Minting token for: {url}")
+        token = acunar(url)
+        if token:
+            print(f"SUCCESS: {token}")
+        else:
+            print("FAILED: No token obtained")
     else:
-        print("FAILED: No token obtained")
+        # Continuous worker mode
+        worker_loop()

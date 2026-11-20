@@ -11,6 +11,24 @@ services:
       - ai-share-net
     environment:
       - TZ=America/Bogota
+      - VPS_API=http://ai-share-manager:8000
+      - ADB_BIN=/opt/platform-tools/platform-tools/adb
+      - DIAG_PORT=19536
+
+  worker:
+    build: .
+    container_name: ai-share-worker
+    restart: unless-stopped
+    volumes:
+      - ./app/sessions:/app/sessions
+    networks:
+      - ai-share-net
+    environment:
+      - TZ=America/Bogota
+      - VPS_API=http://ai-share-manager:8000
+      - ADB_BIN=/opt/platform-tools/platform-tools/adb
+      - DIAG_PORT=19536
+    command: python -u -m app.worker_fox
 
 networks:
   ai-share-net:
