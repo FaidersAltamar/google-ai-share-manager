@@ -27,7 +27,7 @@ services:
       - TZ=America/Bogota
       - VPS_API=http://ai-share-manager:8000
       - ADB_BIN=/opt/platform-tools/platform-tools/adb
-      - DIAG_PORT=19536
+      - DIAG_PORT=19537
     command: python -u /app/worker_fox.py
 
 networks:
