@@ -4,6 +4,7 @@ FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
 WORKDIR /app
 
 # Dependencias del sistema
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     wget \
