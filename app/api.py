@@ -154,11 +154,14 @@ def queue_add(item: QueueItem):
 
 
 @app.get("/links/queue")
-def queue_take():
-    """El worker toma el siguiente trabajo (FIFO)."""
+def queue_take(peek: bool = False):
+    """El worker toma la siguiente trabajo (FIFO). Con peek=true NO la saca:
+    sirve para inspeccionar la cola sin robarle el job al worker."""
     q = _load_json(QUEUE_FILE, [])
     if not q:
         return {"url": None}
+    if peek:
+        return {"url": q[0]["url"], "posicion": 1, "total": len(q), "peek": True}
     item = q.pop(0)
     _save_json(QUEUE_FILE, q)
     return item
