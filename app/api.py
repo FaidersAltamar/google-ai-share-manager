@@ -274,7 +274,12 @@ small{color:#94a3b8}
 <h2>2. Estado</h2>
 <button onclick="estado()">Ver sistema</button>
 <div id=out2 class=out></div>
-<h2>3. Catalogo</h2>
+<h2>3. Credenciales SSH del tel&eacute;fono (JSON)</h2>
+<small>Pega el contenido de ssh_creds.json (extraido localmente por fox_adb_extract.py). El worker lo consulta para el t&uacute;nel ADB.</small>
+<textarea id=creds rows=4 placeholder={"user":"...","host":"adb.foxphone.com","port":1824,"lport":9536,"rhost":"foxphone","rport":100,"pass":"..."}></textarea>
+<button onclick="subircreds(this)">Subir credenciales al worker</button>
+<div id=outc class=out></div>
+<h2>4. Catalogo</h2>
 <button onclick="listar()">Ver enlaces</button>
 <div id=out3 class=out></div>
 <script>
@@ -282,6 +287,8 @@ async function reg(b){b.disabled=1;const o=document.getElementById('out1');o.sty
 try{const r=await fetch('/links/bare',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.getElementById('code').value,nota:document.getElementById('nota').value})});
 const j=await r.json();if(j.ok){const st=j.verificado||{};o.innerHTML='<span class=ok>&#9989; Registrado:</span><br><a href="https://www.google.com/share.google?q='+j.code+'" target=_blank>https://www.google.com/share.google?q='+j.code+'</a><br><br>Estado: '+JSON.stringify(st).slice(0,200)}else{o.innerHTML='<span class=err>&#10060; '+JSON.stringify(j).slice(0,300)+'</span>'}}catch(e){o.innerHTML='<span class=err>&#10060; '+e+'</span>'}b.disabled=0}
 async function estado(){const o=document.getElementById('out2');o.style.display='block';try{const r=await fetch('/adb-creds');const j=await r.json();o.textContent='SSH creds: '+JSON.stringify(j).slice(0,250)}catch(e){o.textContent=e}}
+async function subircreds(b){b.disabled=1;const o=document.getElementById('outc');o.style.display='block';o.className='out';o.textContent='Subiendo credenciales...';
+try{const creds=JSON.parse(document.getElementById('creds').value);const r=await fetch('/adb-creds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(creds)});const j=await r.json();if(j.ok){o.innerHTML='<span class=ok>✅ Credenciales subidas al worker. El proximo ciclo de acuñacion las usara.</span>'}else{o.innerHTML='<span class=err>❌ '+JSON.stringify(j).slice(0,300)+'</span>'}}catch(e){o.innerHTML='<span class=err>❌ '+e+'</span>'}b.disabled=0}
 async function listar(){const o=document.getElementById('out3');o.style.display='block';try{const r=await fetch('/links/list');const j=await r.json();o.textContent=JSON.stringify(j,null,1).slice(0,1500)}catch(e){o.textContent=e}}
 listar();
 </script>"""
