@@ -7,6 +7,8 @@ services:
       - "8000:8000"
     volumes:
       - ./app/sessions:/app/sessions
+      - ./app/api.py:/app/api.py:ro
+      - ./app/worker_fox.py:/app/worker_fox.py:ro
     networks:
       - ai-share-net
     environment:
@@ -14,7 +16,7 @@ services:
       - VPS_API=http://ai-share-manager:8000
       - ADB_BIN=/opt/platform-tools/platform-tools/adb
       - DIAG_PORT=19536
-      - API_KEY=GSG-2026-K9vL3xN7pQ2rT8wY
+      - API_KEY=${API_KEY}
 
   worker:
     build: .
@@ -22,6 +24,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./app/sessions:/app/sessions
+      - ./app/worker_fox.py:/app/worker_fox.py:ro
     networks:
       - ai-share-net
     environment:
@@ -29,8 +32,24 @@ services:
       - VPS_API=http://ai-share-manager:8000
       - ADB_BIN=/opt/platform-tools/platform-tools/adb
       - DIAG_PORT=19537
-      - API_KEY=GSG-2026-K9vL3xN7pQ2rT8wY
+      - API_KEY=${API_KEY}
     command: python -u /app/worker_fox.py
+
+  creds:
+    build: .
+    container_name: ai-share-creds
+    restart: unless-stopped
+    volumes:
+      - ./app/sessions:/app/sessions
+      - ./app/fox_creds_auto.py:/app/fox_creds_auto.py:ro
+    networks:
+      - ai-share-net
+    environment:
+      - TZ=America/Bogota
+      - FOX_API=http://ai-share-manager:8000
+      - FOX_INTERVAL=${FOX_INTERVAL:-21600}
+      - API_KEY=${API_KEY}
+    command: python -u /app/fox_creds_auto.py --loop
 
   cloudflared-s7:
     image: cloudflare/cloudflared:latest
