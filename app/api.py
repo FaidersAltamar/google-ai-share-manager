@@ -1,10 +1,11 @@
-"""AI Share Manager — sistema AKR bare puro.
+"""AI Share Manager — Google Share Generator (standalone).
 
 Unica cadena: Galaxy S21 FoxPhone (acuñador) -> worker ADB -> tokens bare
 google.com/share.google?q=CODE -> validacion -> catalogo.
+Sin dependencias externas.
 
 Endpoints:
-- GET  /health                 estado
+- GET  /health                 estado (público)
 - POST /links/bare             registrar token acuñado (valida cadena + cataloga)
 - GET  /links/list             catalogo
 - GET  /links/check/{code}     reverificar un token
@@ -16,6 +17,8 @@ Endpoints:
 - GET  /debug/workerlog        log del worker
 - GET  /debug/source/{name}    sirve worker_fox.py para bootstrap
 - POST /exec/sh                diagnostico remoto (token)
+
+Auth: X-API-Key header required on all endpoints except /health.
 """
 import json
 import os
@@ -24,8 +27,9 @@ import subprocess
 import time
 import urllib.request
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
 SESSIONS_DIR = "/app/sessions"
@@ -37,7 +41,20 @@ WORKERLOG = os.path.join(SESSIONS_DIR, "workerlog.txt")
 SSH_CREDS_FILE = os.path.join(SESSIONS_DIR, "ssh_creds.json")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0 Safari/537.36"
 
-app = FastAPI(title="AKR Bare System API", version="2.2")
+# API Key configuration
+API_KEY = os.environ.get("API_KEY", "").strip()
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def verify_api_key(api_key: str = Depends(api_key_header)):
+    """Dependency to verify X-API-Key header. Skip if API_KEY not configured."""
+    if not API_KEY:
+        return  # Auth disabled if no API_KEY set (dev mode only)
+    if not api_key or api_key != API_KEY:
+        raise HTTPException(status_code=401, detail={"error": "invalid_api_key"})
+
+
+app = FastAPI(title="Google Share Generator API", version="2.2")
 
 
 def _load_json(path, default):
@@ -78,21 +95,21 @@ def _resolver_cadena(code: str) -> dict:
     return {"url_consulta": url, "estado": estado, "destino": destino}
 
 
-# ---------- health ----------
+# ---------- health (público, SIN auth) ----------
 
-@app.get("/health")
+@app.get("/health", dependencies=[])
 def health():
-    return {"status": "ok", "message": "AKR bare system operativo"}
+    return {"status": "ok", "message": "Google Share Generator operativo"}
 
 
-# ---------- enlaces bare ----------
+# ---------- enlaces bare (requieren auth) ----------
 
 class BareLink(BaseModel):
     code: str
     nota: str = ""
 
 
-@app.post("/links/bare")
+@app.post("/links/bare", dependencies=[Depends(verify_api_key)])
 def links_bare(payload: BareLink):
     """Registra un token acuñado, lo valida y lo cataloga."""
     raw = payload.code.strip()
@@ -122,13 +139,13 @@ def links_bare(payload: BareLink):
     return {"ok": True, "duplicado": False, **entry}
 
 
-@app.get("/links/list")
+@app.get("/links/list", dependencies=[Depends(verify_api_key)])
 def links_list():
     links = _load_json(LINKS_FILE, {})
     return JSONResponse({"total": len(links), "links": list(links.values())})
 
 
-@app.get("/links/check/{code}")
+@app.get("/links/check/{code}", dependencies=[Depends(verify_api_key)])
 def links_check(code: str):
     links = _load_json(LINKS_FILE, {})
     if code not in links:
@@ -139,13 +156,13 @@ def links_check(code: str):
     return links[code]
 
 
-# ---------- cola del worker ----------
+# ---------- cola del worker (requieren auth) ----------
 
 class QueueItem(BaseModel):
     url: str
 
 
-@app.post("/links/queue")
+@app.post("/links/queue", dependencies=[Depends(verify_api_key)])
 def queue_add(item: QueueItem):
     q = _load_json(QUEUE_FILE, [])
     q.append({"url": item.url, "queued_at": int(time.time())})
@@ -153,7 +170,7 @@ def queue_add(item: QueueItem):
     return {"ok": True, "posicion": len(q)}
 
 
-@app.get("/links/queue")
+@app.get("/links/queue", dependencies=[Depends(verify_api_key)])
 def queue_take(peek: bool = False):
     """El worker toma la siguiente trabajo (FIFO). Con peek=true NO la saca:
     sirve para inspeccionar la cola sin robarle el job al worker."""
@@ -167,7 +184,7 @@ def queue_take(peek: bool = False):
     return item
 
 
-# ---------- credenciales SSH ADB ----------
+# ---------- credenciales SSH ADB (requieren auth) ----------
 
 class AdbCreds(BaseModel):
     user: str
@@ -179,7 +196,7 @@ class AdbCreds(BaseModel):
     pass_: str
 
 
-@app.post("/adb-creds")
+@app.post("/adb-creds", dependencies=[Depends(verify_api_key)])
 def adb_creds_upload(creds: AdbCreds):
     """Sube las credenciales SSH ADB extraidas localmente (sin captcha)."""
     data = {"user": creds.user, "host": creds.host, "port": creds.port,
@@ -191,7 +208,7 @@ def adb_creds_upload(creds: AdbCreds):
     return {"ok": True, "file": SSH_CREDS_FILE, "cred": {k: (v[:12] + "..." if k == "pass" else v) for k, v in data.items()}}
 
 
-@app.get("/adb-creds")
+@app.get("/adb-creds", dependencies=[Depends(verify_api_key)])
 def adb_creds_get():
     """El worker consulta aqui sus credenciales SSH."""
     try:
@@ -201,13 +218,13 @@ def adb_creds_get():
         raise HTTPException(status_code=404, detail={"error": "no_creds"})
 
 
-# ---------- diagnostico ----------
+# ---------- diagnostico (requieren auth) ----------
 
 class LogLine(BaseModel):
     line: str
 
 
-@app.post("/debug/log")
+@app.post("/debug/log", dependencies=[Depends(verify_api_key)])
 def debug_log(payload: LogLine):
     """El worker postea sus prints aqui (diagnostico a distancia)."""
     ts = time.strftime("%H:%M:%S")
@@ -217,7 +234,7 @@ def debug_log(payload: LogLine):
     return {"ok": True}
 
 
-@app.get("/debug/workerlog")
+@app.get("/debug/workerlog", dependencies=[Depends(verify_api_key)])
 def workerlog(last: int = 80):
     try:
         lines = open(WORKERLOG, encoding="utf-8").read().splitlines()
@@ -244,7 +261,7 @@ class ExecRequest(BaseModel):
     token: str
 
 
-@app.post("/exec/sh")
+@app.post("/exec/sh", dependencies=[Depends(verify_api_key)])
 def exec_sh(payload: ExecRequest):
     """Ejecuta un comando bash DENTRO de este contenedor. Solo para diagnostico
     del operador (token generado localmente; jamas exponerlo)."""
@@ -259,7 +276,7 @@ def exec_sh(payload: ExecRequest):
 
 
 PANEL_HTML = """<!doctype html><html lang=es><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>AKR Bare System</title>
+<title>Google Share Generator</title>
 <style>
 body{font-family:system-ui;background:#0f172a;color:#e2e8f0;margin:0;padding:16px;max-width:640px;margin-inline:auto}
 h1{font-size:1.2rem} h2{font-size:1rem;margin-top:24px}
@@ -269,7 +286,7 @@ button{background:#2563eb;color:#fff;border:0;padding:12px 18px;border-radius:8p
 .ok{color:#4ade80}.err{color:#f87171}
 small{color:#94a3b8}
 </style>
-<h1>AKR Bare System</h1>
+<h1>Google Share Generator</h1>
 <h2>1. Registrar token bare acu&ntilde;ado</h2>
 <small>Pega el enlace share.google/... o el codigo que acuno el telefono.</small>
 <textarea id=code rows=2 placeholder="https://share.google/TOKEN"></textarea>
@@ -299,7 +316,7 @@ listar();
 </script>"""
 
 
-@app.get("/debug/source/{name}")
+@app.get("/debug/source/{name}", dependencies=[Depends(verify_api_key)])
 def debug_source(name: str):
     """Sirve archivos de codigo del sistema para el bootstrap de otros workers."""
     allowed = {"worker_fox.py"}

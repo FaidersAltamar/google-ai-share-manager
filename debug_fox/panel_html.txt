@@ -1,5 +1,5 @@
 PANEL_HTML = """<!doctype html><html lang=es><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>AKR Bare System</title>
+<title>Google Share Generator</title>
 <style>
 body{font-family:system-ui;background:#0f172a;color:#e2e8f0;margin:0;padding:16px;max-width:640px;margin-inline:auto}
 h1{font-size:1.2rem} h2{font-size:1rem;margin-top:24px}
@@ -9,7 +9,7 @@ button{background:#2563eb;color:#fff;border:0;padding:12px 18px;border-radius:8p
 .ok{color:#4ade80}.err{color:#f87171}
 small{color:#94a3b8}
 </style>
-<h1>AKR Bare System</h1>
+<h1>Google Share Generator</h1>
 <h2>1. Registrar token bare acu&ntilde;ado</h2>
 <small>Pega el enlace share.google/... o el codigo que acuno el telefono.</small>
 <textarea id=code rows=2 placeholder="https://share.google/TOKEN"></textarea>

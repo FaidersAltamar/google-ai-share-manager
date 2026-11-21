@@ -14,6 +14,7 @@ services:
       - VPS_API=http://ai-share-manager:8000
       - ADB_BIN=/opt/platform-tools/platform-tools/adb
       - DIAG_PORT=19536
+      - API_KEY=GSG-2026-K9vL3xN7pQ2rT8wY
 
   worker:
     build: .
@@ -28,7 +29,17 @@ services:
       - VPS_API=http://ai-share-manager:8000
       - ADB_BIN=/opt/platform-tools/platform-tools/adb
       - DIAG_PORT=19537
+      - API_KEY=GSG-2026-K9vL3xN7pQ2rT8wY
     command: python -u /app/worker_fox.py
+
+  cloudflared-s7:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-s7
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run --token eyJhIjoiZWRhNTZjYzA3Y2UzZWMwZmIwODdlOTQzNzRhZjRjNDQiLCJ0IjoiMDdhNjhlYTctNzVmOS00Yjk2LWI3ZmEtZDg1ZTM4NjVhNTFlIiwicyI6Im04UmVVcUtqa0xtcjVwcmVzTWY1d3hBenRjelczYnJ1ZlZxNndJRFBPK1E3OG9XSUlhSUdMajdJWEZvZ2d5bzFXL0R3QWdlV2sxQTFIZHNkQnlzOHF3PT0ifQ==
+    environment:
+      - TZ=America/Bogota
 
 networks:
   ai-share-net:

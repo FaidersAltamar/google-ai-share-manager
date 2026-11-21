@@ -8,20 +8,32 @@ import subprocess
 
 # Global constants and utilities
 API = os.environ.get("VPS_API", "http://ai-share-manager:8000")
+API_KEY = os.environ.get("API_KEY", "").strip()
 GAPP = "com.google.android.googlequicksearchbox"
 ADB_BIN = os.environ.get("ADB_BIN", "/opt/platform-tools/platform-tools/adb")
 DEBUG_LOG_API = API + "/debug/log"
+
+
+def _request(url, data=None, method="GET", timeout=15):
+    """HTTP request with optional API_KEY header."""
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["X-API-Key"] = API_KEY
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(data).encode() if data else None,
+        headers=headers,
+        method=method
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
 
 
 def log(msg):
     sys.stdout.write(f"FoxWorkerLOG: {msg}\n")
     sys.stdout.flush()
     try:
-        urllib.request.urlopen(urllib.request.Request(
-            DEBUG_LOG_API,
-            data=json.dumps({"line": str(msg)[:500]}).encode(),
-            headers={"Content-Type": "application/json"}
-        ), timeout=5)
+        _request(DEBUG_LOG_API, data={"line": str(msg)[:500]}, method="POST", timeout=5)
     except Exception:
         pass
 
@@ -34,8 +46,7 @@ class FoxWorker:
 
     def _get_ssh_config(self):
         if self._ssh_config is None:
-            with urllib.request.urlopen(API + "/adb-creds", timeout=15) as r:
-                self._ssh_config = json.loads(r.read().decode())
+            self._ssh_config = _request(API + "/adb-creds")
         return self._ssh_config
 
     def SSHConnect(self, timeout=120):
@@ -197,9 +208,9 @@ class FoxWorker:
                 self.tap(n["x"], n["y"])
                 time.sleep(5)
                 xml2 = self.dump_ui()
-                toks = re.findall(r"https://share\.google/[A-Za-z0-9_\-]+", xml2)
-                if toks:
-                    return toks[-1]
+                codes = re.findall(r"https://share\.google/([A-Za-z0-9_\-]+)", xml2)
+                if codes:
+                    return f"https://www.google.com/share.google?q={codes[-1]}"
         return None
 
     def quit(self):
@@ -308,9 +319,7 @@ def worker_loop():
     while True:
         try:
             # Poll queue
-            req = urllib.request.Request(API + "/links/queue")
-            with urllib.request.urlopen(req, timeout=15) as r:
-                item = json.loads(r.read().decode())
+            item = _request(API + "/links/queue")
             
             url = item.get("url")
             if not url:
@@ -324,14 +333,7 @@ def worker_loop():
             if token:
                 log(f"Token obtained: {token}")
                 # Register the token
-                reg = urllib.request.Request(
-                    API + "/links/bare",
-                    data=json.dumps({"code": token, "nota": f"auto:{url}"}).encode(),
-                    headers={"Content-Type": "application/json"},
-                    method="POST"
-                )
-                with urllib.request.urlopen(reg, timeout=15) as r:
-                    res = json.loads(r.read().decode())
+                res = _request(API + "/links/bare", data={"code": token, "nota": f"auto:{url}"}, method="POST")
                 log(f"Registered: {res}")
             else:
                 log(f"Failed to obtain token for {url}")
